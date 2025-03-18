@@ -33,7 +33,7 @@ def run_pipeline():
     env = Environment(
         name="edu06_env",
         conda_file="environment.yml",
-        image="mcr.microsoft.com/azureml/minimal-ubuntu20.04:latest"
+        image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
     )
     ml_client.environments.create_or_update(env)
 
