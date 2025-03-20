@@ -157,7 +157,7 @@ def run_pipeline():
     parser.add_argument(
         "--raw_slides_uri",
         type=str,
-        default="azureml://datastores/workspaceblobstore/paths/my_slides/",
+        default="azureml://datastores/workspaceblobstore/paths/UI/2025-03-05_125751_UTC/",
         help="URI folder of raw slides (for data prep)."
     )
     # Input path to prepped data (when we skip data prep)

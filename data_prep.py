@@ -5,6 +5,7 @@ import openslide
 import numpy as np
 from PIL import Image
 import logging
+from tqdm import tqdm
 
 def tile_slide(slide_path, out_dir, tile_size=512, overlap=0):
     """
@@ -20,24 +21,32 @@ def tile_slide(slide_path, out_dir, tile_size=512, overlap=0):
     width, height = slide.dimensions
     logging.info(f"Slide {slide_path} dimensions: {width}x{height}")
 
-    x = 0
-    while x < width:
-        y = 0
-        while y < height:
-            tile_region = slide.read_region(
-                (x, y),
-                0,
-                (tile_size, tile_size)
-            )
-            tile_rgb = tile_region.convert("RGB")
+    # Calculate the total number of tiles for progress tracking
+    steps_x = (width // (tile_size - overlap)) + (1 if width % (tile_size - overlap) != 0 else 0)
+    steps_y = (height // (tile_size - overlap)) + (1 if height % (tile_size - overlap) != 0 else 0)
+    total_tiles = steps_x * steps_y
 
-            tile_filename = f"{slide_name}_x{x}_y{y}.png"
-            tile_path = os.path.join(slide_out_dir, tile_filename)
-            tile_rgb.save(tile_path)
-            logging.debug(f"Saved tile: {tile_path}")
+    # Create a progress bar for the total number of tiles
+    with tqdm(total=total_tiles, desc=f"Tiling {slide_name}", unit="tile") as pbar:
+        x = 0
+        while x < width:
+            y = 0
+            while y < height:
+                tile_region = slide.read_region(
+                    (x, y),
+                    0,
+                    (tile_size, tile_size)
+                )
+                tile_rgb = tile_region.convert("RGB")
 
-            y += (tile_size - overlap)
-        x += (tile_size - overlap)
+                tile_filename = f"{slide_name}_x{x}_y{y}.png"
+                tile_path = os.path.join(slide_out_dir, tile_filename)
+                tile_rgb.save(tile_path)
+                logging.debug(f"Saved tile: {tile_path}")
+
+                y += (tile_size - overlap)
+                pbar.update(1)
+            x += (tile_size - overlap)
 
     slide.close()
 
@@ -63,7 +72,8 @@ def main():
         logging.warning("No .ndpi files found in the input directory: %s", args.input_data)
         return
 
-    for slide_path in ndpi_files:
+    # Show progress bar for processing slides
+    for slide_path in tqdm(ndpi_files, desc="Processing slides", unit="slide"):
         logging.info(f"Tiling slide: {slide_path}")
         tile_slide(slide_path, args.output_path, tile_size=args.tile_size, overlap=args.overlap)
 
