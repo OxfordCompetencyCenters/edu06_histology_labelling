@@ -4,12 +4,18 @@ channels:
   - defaults
 dependencies:
   - python=3.9
+  # Install native OpenSlide library from conda-forge
+  - openslide
+  # Optionally install openslide-python from conda-forge instead of pip
+  - openslide-python
   - pip
   - pip:
     - azure-ai-ml
-    - openslide-python
+    # If you prefer pip for openslide-python, comment out `- openslide-python` above and uncomment the line below:
+    # - openslide-python
     - pillow
     - numpy
     - torch
     - torchvision
+    - scikit-image
     - cellpose==2.2.1

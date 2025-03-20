@@ -1,27 +1,105 @@
 import argparse
 import os
+import glob
 import json
+import logging
+
+import numpy as np
+from PIL import Image
+from skimage import measure
+
+def mask_to_polygon_list(mask):
+    """
+    Converts a labeled mask (numpy array) into a list of polygons.
+    Return format: 
+    [
+      {
+        'label_id': 1,
+        'polygon': [(x1, y1), (x2, y2), ...]
+      },
+      ...
+    ]
+    """
+    polygons = []
+    unique_labels = np.unique(mask)
+    for lbl in unique_labels:
+        if lbl == 0:
+            continue
+        binary_mask = (mask == lbl).astype(np.uint8)
+        contours = measure.find_contours(binary_mask, 0.5)
+        if len(contours) > 0:
+            main_contour = max(contours, key=lambda x: x.shape[0])
+            poly = [(float(pt[1]), float(pt[0])) for pt in main_contour]
+            polygons.append({"label_id": int(lbl), "polygon": poly})
+    return polygons
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", type=str, help="Path to classification results.")
     parser.add_argument("--output_path", type=str, help="Final output location.")
     args = parser.parse_args()
 
+    logging.info("Starting post-processing with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
 
-    # Example: output final polygon+label JSON
-    results = {
-        "cells": [
-            {"label": "Lymphocyte", "polygon": [(10,10),(11,14),(9,17)], "confidence": 0.95},
-            {"label": "Fibroblast", "polygon": [(20,20),(22,24),(18,26)], "confidence": 0.88}
-        ]
-    }
+    class_results_file = os.path.join(args.input_path, "classification_results.json")
+    if not os.path.exists(class_results_file):
+        logging.warning("No classification_results.json found in input path: %s", args.input_path)
+        return
+    
+    with open(class_results_file, "r") as f:
+        classification_results = json.load(f)
+
+    final_annotations = []
+
+    for tile_result in classification_results:
+        tile_path = tile_result["tile_path"]
+        tile_dir = os.path.dirname(tile_path)
+        tile_name = os.path.splitext(os.path.basename(tile_path))[0]
+        mask_name = tile_name + "_mask.png"
+        mask_path = os.path.join(tile_dir, mask_name)
+        if not os.path.exists(mask_path):
+            logging.warning("Mask not found for tile: %s", tile_path)
+            continue
+
+        mask_img = Image.open(mask_path)
+        mask_arr = np.array(mask_img)
+        polygons = mask_to_polygon_list(mask_arr)
+
+        cell_records = []
+        for poly_info in polygons:
+            lbl_id = poly_info["label_id"]
+            classified_cell = next(
+                (c for c in tile_result["classified_cells"] if c["label_id"] == lbl_id),
+                None
+            )
+            if classified_cell is None:
+                logging.debug("No classification found for label_id=%d in tile=%s", lbl_id, tile_path)
+                continue
+            
+            cell_records.append({
+                "label_id": lbl_id,
+                "polygon": poly_info["polygon"],
+                "pred_class": classified_cell["pred_class"],
+                "bbox": classified_cell["bbox"]
+            })
+
+        final_annotations.append({
+            "tile_path": tile_path,
+            "cells": cell_records
+        })
+
     final_json = os.path.join(args.output_path, "final_annotations.json")
     with open(final_json, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(final_annotations, f, indent=2)
     
-    print("Post-processing step done. Output at:", final_json)
+    logging.info("Post-processing step done. Output at: %s", final_json)
 
 if __name__ == "__main__":
     main()
