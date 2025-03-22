@@ -68,7 +68,7 @@ def build_components(env,
         name="Segmentation",
         display_name="Cell Segmentation",
         inputs={
-            "input_path": Input(type=AssetTypes.URI_FOLDER)
+            "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER)
         },
         outputs={
             "output_path": Output(
@@ -79,7 +79,7 @@ def build_components(env,
         code="./",  # directory with segment.py
         command=(
             "python segment.py "
-            "--input_path ${{inputs.input_path}} "
+            "--input_path ${{inputs.prepped_tiles_path}} "
             "--output_path ${{outputs.output_path}} "
             "--model_type cyto2 "
             "--chan 2 --chan2 1"
@@ -92,7 +92,8 @@ def build_components(env,
         name="Classification",
         display_name="Classify Cells",
         inputs={
-            "input_path": Input(type=AssetTypes.URI_FOLDER)
+            "segmented_path": Input(type=AssetTypes.URI_FOLDER),
+            "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
         },
         outputs={
             "output_path": Output(
@@ -103,7 +104,8 @@ def build_components(env,
         code="./",  # directory with classify.py
         command=(
             "python classify.py "
-            "--input_path ${{inputs.input_path}} "
+            "--segmented_path ${{inputs.segmented_path}} "
+            "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
             "--output_path ${{outputs.output_path}} "
             "--num_classes 4"
         ),
@@ -115,7 +117,8 @@ def build_components(env,
         name="PostProcess",
         display_name="Post-Processing",
         inputs={
-            "input_path": Input(type=AssetTypes.URI_FOLDER)
+            "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
+            "classification_path": Input(type=AssetTypes.URI_FOLDER)
         },
         outputs={
             "output_path": Output(
@@ -126,7 +129,8 @@ def build_components(env,
         code="./",  # directory with post_process.py
         command=(
             "python post_process.py "
-            "--input_path ${{inputs.input_path}} "
+            "--segmentation_path ${{inputs.segmentation_path}} "
+            "--classification_path ${{inputs.classification_path}} "
             "--output_path ${{outputs.output_path}}"
         ),
         environment=env,
@@ -235,9 +239,15 @@ def run_pipeline():
         description="Pipeline for segmentation + classification + postprocess (requires prepped data)."
     )
     def rest_pipeline(prepped_tiles_input):
-        seg_step = components["segment"](input_path=prepped_tiles_input)
-        cls_step = components["classify"](input_path=seg_step.outputs.output_path)
-        post_step = components["post_process"](input_path=cls_step.outputs.output_path)
+        seg_step = components["segment"](prepped_tiles_path=prepped_tiles_input)
+        cls_step = components["classify"](
+            segmented_path=seg_step.outputs.output_path,
+            prepped_tiles_path=prepped_tiles_input
+        )
+        post_step = components["post_process"](
+            segmentation_path=seg_step.outputs.output_path,
+            classification_path=cls_step.outputs.output_path
+        )
         return {"final_output": post_step.outputs.output_path}
 
     @pipeline(
@@ -246,9 +256,15 @@ def run_pipeline():
     )
     def full_pipeline(raw_slides_input):
         prep_step = components["data_prep"](input_data=raw_slides_input)
-        seg_step = components["segment"](input_path=prep_step.outputs.output_path)
-        cls_step = components["classify"](input_path=seg_step.outputs.output_path)
-        post_step = components["post_process"](input_path=cls_step.outputs.output_path)
+        seg_step = components["segment"](prepped_tiles_path=prep_step.outputs.output_path)
+        cls_step = components["classify"](
+            segmented_path=seg_step.outputs.output_path,
+            prepped_tiles_path=prep_step.outputs.output_path
+        )
+        post_step = components["post_process"](
+            segmentation_path=seg_step.outputs.output_path,
+            classification_path=cls_step.outputs.output_path
+        )
         return {"final_output": post_step.outputs.output_path}
 
     # --------------------------------------------------

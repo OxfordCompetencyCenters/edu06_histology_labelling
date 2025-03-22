@@ -46,9 +46,14 @@ def main():
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", type=str, help="Path to segmentation results (masks + bboxes).")
-    parser.add_argument("--output_path", type=str, help="Path for classification results.")
-    parser.add_argument("--num_classes", type=int, default=4, help="Number of classes in your classifier.")
+    parser.add_argument("--segmented_path", type=str,
+                        help="Path to segmentation results (masks + *_bboxes.json).")
+    parser.add_argument("--prepped_tiles_path", type=str,
+                        help="Path to the original prepped tile images.")
+    parser.add_argument("--output_path", type=str,
+                        help="Path for classification results.")
+    parser.add_argument("--num_classes", type=int, default=4,
+                        help="Number of classes for classification.")
     args = parser.parse_args()
 
     logging.info("Starting classification with arguments: %s", args)
@@ -59,17 +64,18 @@ def main():
     model = model.to(device)
     model.eval()
 
+    # Search for all bounding box files under segmented_path
+    bbox_files = glob.glob(os.path.join(args.segmented_path, "**/*_bboxes.json"), recursive=True)
+    if not bbox_files:
+        logging.warning("No bounding box JSON files found under: %s", args.segmented_path)
+        return
+
     transform = T.Compose([
         T.Resize((224,224)),
         T.ToTensor(),
         T.Normalize(mean=[0.485, 0.456, 0.406],
                     std=[0.229, 0.224, 0.225])
     ])
-
-    bbox_files = glob.glob(os.path.join(args.input_path, "**/*_bboxes.json"), recursive=True)
-    if not bbox_files:
-        logging.warning("No bounding box JSON files found in the input path: %s", args.input_path)
-        return
 
     classification_results = []
 
@@ -78,11 +84,13 @@ def main():
             bboxes = json.load(f)
 
         tile_name = os.path.basename(bbox_file).replace("_bboxes.json", ".png")
-        tile_dir = os.path.dirname(bbox_file)
-        tile_path = os.path.join(tile_dir, tile_name)
+        parent_dir = os.path.basename(os.path.dirname(bbox_file))
+        tile_path = os.path.join(args.prepped_tiles_path, parent_dir, tile_name)
+
         if not os.path.exists(tile_path):
             logging.warning("Tile image not found at %s. Skipping.", tile_path)
             continue
+        logging.info("Classifying bboxes for tile: %s", tile_path)
 
         tile_results = []
         for bbox_entry in bboxes:
@@ -100,6 +108,7 @@ def main():
             "classified_cells": tile_results
         })
 
+    # Write out a single JSON with classification results
     out_file = os.path.join(args.output_path, "classification_results.json")
     with open(out_file, "w") as f:
         json.dump(classification_results, f, indent=2)

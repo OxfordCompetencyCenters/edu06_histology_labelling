@@ -16,14 +16,14 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels):
     """
     tile_name = os.path.splitext(os.path.basename(img_path))[0]
     img = np.array(Image.open(img_path))
-    logging.debug(f"Segmenting tile: {img_path}")
+    logging.info(f"Segmenting tile: {img_path}")
 
     masks, flows, styles, diams = model.eval(img, channels=channels)
     mask_img = Image.fromarray(masks.astype(np.uint16))
     mask_filename = f"{tile_name}_mask.png"
     mask_path = os.path.join(out_dir, mask_filename)
     mask_img.save(mask_path)
-    logging.debug(f"Saved mask to {mask_path}")
+    logging.info(f"Saved mask to {mask_path}")
 
     labeled_mask = label(masks, connectivity=1, background=0)
     props = regionprops(labeled_mask)
@@ -40,7 +40,7 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels):
     bbox_path = os.path.join(out_dir, bbox_filename)
     with open(bbox_path, "w") as f:
         json.dump(bboxes, f, indent=2)
-    logging.debug(f"Saved bounding boxes to {bbox_path}")
+    logging.info(f"Saved bounding boxes to {bbox_path}")
 
 def main():
     logging.basicConfig(

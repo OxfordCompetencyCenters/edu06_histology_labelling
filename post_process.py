@@ -41,16 +41,17 @@ def main():
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", type=str, help="Path to classification results.")
+    parser.add_argument("--segmentation_path", type=str, help="Path to segmentation masks.")
+    parser.add_argument("--classification_path", type=str, help="Path to classification results.")
     parser.add_argument("--output_path", type=str, help="Final output location.")
     args = parser.parse_args()
 
     logging.info("Starting post-processing with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
 
-    class_results_file = os.path.join(args.input_path, "classification_results.json")
+    class_results_file = os.path.join(args.classification_path, "classification_results.json")
     if not os.path.exists(class_results_file):
-        logging.warning("No classification_results.json found in input path: %s", args.input_path)
+        logging.warning("No classification_results.json found in input path: %s", args.classification_path)
         return
     
     with open(class_results_file, "r") as f:
@@ -60,12 +61,12 @@ def main():
 
     for tile_result in classification_results:
         tile_path = tile_result["tile_path"]
-        tile_dir = os.path.dirname(tile_path)
+        parent_dir = os.path.basename(os.path.dirname(tile_path))
         tile_name = os.path.splitext(os.path.basename(tile_path))[0]
         mask_name = tile_name + "_mask.png"
-        mask_path = os.path.join(tile_dir, mask_name)
+        mask_path = os.path.join(args.segmentation_path, parent_dir, mask_name)
         if not os.path.exists(mask_path):
-            logging.warning("Mask not found for tile: %s", tile_path)
+            logging.warning(f"Mask {mask_path} not found for tile: {tile_path}")
             continue
 
         mask_img = Image.open(mask_path)
@@ -80,7 +81,7 @@ def main():
                 None
             )
             if classified_cell is None:
-                logging.debug("No classification found for label_id=%d in tile=%s", lbl_id, tile_path)
+                logging.info("No classification found for label_id=%d in tile=%s", lbl_id, tile_path)
                 continue
             
             cell_records.append({
