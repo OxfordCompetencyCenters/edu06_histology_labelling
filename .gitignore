@@ -1,0 +1,26 @@
+# Ignore Python notebook files
+*.ipynb
+
+# Byte-compiled Python files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Virtual environment folders
+env/
+venv/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+*.swp

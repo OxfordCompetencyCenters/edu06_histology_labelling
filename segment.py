@@ -5,37 +5,48 @@ import json
 import numpy as np
 from PIL import Image
 from cellpose import models
-from skimage.measure import regionprops, label
 import logging
 
 def segment_and_extract_bboxes(img_path, model, out_dir, channels):
     """
     Runs Cellpose segmentation on a single tile.
-    Saves the resulting mask as a PNG or NumPy file.
-    Also extracts bounding boxes for each cell for classification.
+    Saves the resulting mask as a PNG.
+    Extracts bounding boxes directly from the mask for each label.
     """
     tile_name = os.path.splitext(os.path.basename(img_path))[0]
     img = np.array(Image.open(img_path))
     logging.info(f"Segmenting tile: {img_path}")
 
+    # 1) Run segmentation
     masks, flows, styles, diams = model.eval(img, channels=channels)
+
+    # 2) Save the mask to disk
     mask_img = Image.fromarray(masks.astype(np.uint16))
     mask_filename = f"{tile_name}_mask.png"
     mask_path = os.path.join(out_dir, mask_filename)
     mask_img.save(mask_path)
     logging.info(f"Saved mask to {mask_path}")
 
-    labeled_mask = label(masks, connectivity=1, background=0)
-    props = regionprops(labeled_mask)
-
+    # 3) Derive bounding boxes from the actual mask values
+    #    (no relabeling step => original Cellpose IDs remain intact)
     bboxes = []
-    for prop in props:
-        y1, x1, y2, x2 = prop.bbox
+    unique_labels = np.unique(masks)
+    for lbl in unique_labels:
+        if lbl == 0:
+            continue  # Skip background
+        coords = np.argwhere(masks == lbl)
+        if coords.size == 0:
+            continue
+        # Rows and cols are the first and second columns of coords
+        min_row, max_row = coords[:, 0].min(), coords[:, 0].max()
+        min_col, max_col = coords[:, 1].min(), coords[:, 1].max()
+
         bboxes.append({
-            "label_id": int(prop.label),
-            "bbox": [int(x1), int(y1), int(x2), int(y2)]
+            "label_id": int(lbl),
+            "bbox": [int(min_col), int(min_row), int(max_col), int(max_row)]
         })
 
+    # 4) Save bounding boxes as JSON
     bbox_filename = f"{tile_name}_bboxes.json"
     bbox_path = os.path.join(out_dir, bbox_filename)
     with open(bbox_path, "w") as f:
@@ -59,7 +70,7 @@ def main():
 
     logging.info("Starting segmentation with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
-    
+
     logging.info(f"Initializing Cellpose model of type: {args.model_type}")
     model = models.Cellpose(model_type=args.model_type)
 
