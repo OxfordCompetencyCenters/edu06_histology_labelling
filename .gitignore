@@ -1,11 +1,11 @@
-# Ignore Python notebook files
-*.ipynb
-
 # Byte-compiled Python files
 *.pyc
 *.pyo
 *.pyd
 __pycache__/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
 
 # Virtual environment folders
 env/
