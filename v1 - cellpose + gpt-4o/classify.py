@@ -4,13 +4,13 @@ import glob
 import json
 import logging
 import base64
-
 from PIL import Image
 from io import BytesIO
-
 import openai
+from openai import OpenAI
 
-def classify_bbox_gpt4o(tile_image, bbox):
+
+def classify_bbox_gpt4o(client, tile_image, bbox):
     """
     Classify a single cell image region using GPT-4o with vision capabilities.
     Crops the given tile image to the bounding box, sends it along with label options
@@ -24,33 +24,35 @@ def classify_bbox_gpt4o(tile_image, bbox):
     cropped_img.save(buffer, format="PNG")  # Using PNG format; JPEG is also acceptable
     image_bytes = buffer.getvalue()
     
-    # Construct the system and user messages for the GPT-4o model
-    system_message = {
-        "role": "system",
-        "content": (
-            "Take the role of a highly experienced histopathologist expert. "
-            "When given an image of a cell, you must identify the correct cell type. "
-            "**Respond with exactly one label from the list and no additional explanation.**"
-        )
-    }
-    user_message = {
-        "role": "user",
-        "content": [
+    # Base64 encode the image
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    
+    # Call the GPT-4o Chat Completions API with the image and prompt
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
             {
-                "type": "input_text",
-                "text": f"Here is a cell image, identify the cell type."
+                "role": "system",
+                "content": (
+                    "Take the role of a highly experienced histopathologist expert. "
+                    "When given an image of a cell, you must identify the correct cell type. "
+                    "**Respond with exactly one label from the list and no additional explanation.**"
+                )
             },
             {
-                "type": "input_image",
-                "image": image_bytes
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is a cell image, identify the cell type."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                    }
+                ]
             }
         ]
-    }
-    
-    # Call the GPT-4o ChatCompletion API with the image and prompt
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",  # GPT-4 model with vision capabilities
-        messages=[system_message, user_message]
     )
     
     # Extract the label from the model's response (first choice)
@@ -75,8 +77,14 @@ def main():
                         help="Number of classes (if you want a consistent interface).")
     args = parser.parse_args()
 
-    logging.info("Starting GPT-4 classification with arguments: %s", args)
+    logging.info("Starting GPT-4o classification with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
+    
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("No OPENAI_API_KEY found in environment!")
+    openai.api_key = api_key
+    client = OpenAI()
 
     # Gather bounding box files
     bbox_files = glob.glob(
@@ -110,7 +118,7 @@ def main():
             bbox = bbox_entry["bbox"]
 
             # Call GPT-4o for classification
-            pred_class = classify_bbox_gpt4(tile_img, bbox)
+            pred_class = classify_bbox_gpt4o(client, tile_img, bbox)
 
             tile_results.append({
                 "label_id": label_id,

@@ -10,6 +10,9 @@ from azure.ai.ml.entities import Environment
 from azure.ai.ml.dsl import pipeline
 from azure.ai.ml.constants import AssetTypes
 
+api_key = os.environ.get("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY is not set locally!")
 # --------------------------------------------------
 # Setup logging
 # --------------------------------------------------
@@ -88,6 +91,7 @@ def build_components(env,
     )
 
     # 3) Classify
+    env_vars = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
     classify_component = command(
         name="Classification",
         display_name="Classify Cells",
@@ -110,6 +114,7 @@ def build_components(env,
             "--num_classes 4"
         ),
         environment=env,
+        environment_variables=env_vars,
     )
 
     # 4) Post-process
@@ -153,9 +158,9 @@ def run_pipeline():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["prep_only", "rest_only", "full"],
+        choices=["prep_only", "rest_only", "full", "classify_only"],
         default="full",
-        help="Which pipeline to run: prep_only, rest_only, or full."
+        help="Which pipeline to run: prep_only, rest_only, classify_only, or full."
     )
     # Input path to raw slides (when we do data prep)
     parser.add_argument(
@@ -171,6 +176,14 @@ def run_pipeline():
         default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/",
         help="URI folder of already-prepped tiles."
     )
+
+    parser.add_argument(
+        "--segmented_data_uri",
+        type=str,
+        default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/",
+        help="URI folder of already-segmented tiles (for classify_only mode)."
+    )
+
     args = parser.parse_args()
 
     logging.info("Parsed arguments: %s", args)
@@ -206,7 +219,7 @@ def run_pipeline():
     env = Environment(
         name="edu06_env",
         conda_file="environment.yml",
-        image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
+        image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
     )
     logging.info("Creating/updating environment: %s", env.name)
     ml_client.environments.create_or_update(env)
@@ -249,6 +262,21 @@ def run_pipeline():
             classification_path=cls_step.outputs.output_path
         )
         return {"final_output": post_step.outputs.output_path}
+    
+    @pipeline(
+        compute=COMPUTE_CLUSTER,
+        description="Pipeline for classification + postprocess (requires prepped + segmented data)."
+    )
+    def classify_only_pipeline(prepped_tiles_input, segmented_input):
+        cls_step = components["classify"](
+            segmented_path=segmented_input,
+            prepped_tiles_path=prepped_tiles_input
+        )
+        post_step = components["post_process"](
+            segmentation_path=segmented_input,
+            classification_path=cls_step.outputs.output_path
+        )
+        return {"final_output": post_step.outputs.output_path}
 
     @pipeline(
         compute=COMPUTE_CLUSTER,
@@ -282,6 +310,13 @@ def run_pipeline():
             prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri)
         )
         experiment_name = "histology_rest_only"
+
+    elif args.mode == "classify_only":
+        pipeline_job = classify_only_pipeline(
+            prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
+            segmented_input=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri)
+        )
+        experiment_name = "histology_classify_only"
 
     else:  # args.mode == "full"
         pipeline_job = full_pipeline(
