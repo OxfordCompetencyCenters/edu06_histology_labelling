@@ -13,6 +13,7 @@ from azure.ai.ml.constants import AssetTypes
 api_key = os.environ.get("OPENAI_API_KEY")
 if not api_key:
     raise ValueError("OPENAI_API_KEY is not set locally!")
+
 # --------------------------------------------------
 # Setup logging
 # --------------------------------------------------
@@ -22,9 +23,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# --------------------------------------------------
-# Constants for your workspace
-# --------------------------------------------------
 SUBSCRIPTION_ID = "bbeb7561-f822-4950-82f6-64dcae8a93ab"
 RESOURCE_GROUP = "AIMLCC-DEV-RG"
 WORKSPACE_NAME = "edu06_histology_img_segmentation"
@@ -33,11 +31,12 @@ COMPUTE_CLUSTER = "edu06-compute-cluster"
 def build_components(env,
                      data_prep_output_uri: str,
                      segment_output_uri: str,
+                     cluster_output_uri: str,
                      classify_output_uri: str,
-                     postprocess_output_uri: str):
+                     postprocess_output_uri: str,
+                     classify_per_cluster: int):
     """
-    Creates command components for data_prep, segment, classify, and post_process.
-    Each output is written to a manually specified path, here with a timestamp prefix.
+    Creates command components for data_prep, segment, cluster, classify, and post_process.
     """
 
     logging.info("Building pipeline components...")
@@ -90,7 +89,32 @@ def build_components(env,
         environment=env,
     )
 
-    # 3) Classify
+    # 3) Cluster (now DBSCAN)
+    cluster_component = command(
+        name="Clustering",
+        display_name="DBSCAN Clustering of Bounding Boxes",
+        inputs={
+            "segmentation_path": Input(type=AssetTypes.URI_FOLDER)
+        },
+        outputs={
+            "cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri)
+        },
+        code="./",  # directory with your updated cluster.py
+        command=(
+            "python cluster.py "
+            "--segmentation_path ${{inputs.segmentation_path}} "
+            "--output_path ${{outputs.cluster_output}} "
+            "--eps 0.5 "
+            "--min_samples 5 "
+            "--gpu"
+        ),
+        environment=env,
+    )
+
+    # 4) Classify
+    #
+    # Pipe the classify_per_cluster argument through to classify.py
+    #
     env_vars = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
     classify_component = command(
         name="Classification",
@@ -98,6 +122,7 @@ def build_components(env,
         inputs={
             "segmented_path": Input(type=AssetTypes.URI_FOLDER),
             "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            "cluster_path": Input(type=AssetTypes.URI_FOLDER)
         },
         outputs={
             "output_path": Output(
@@ -105,19 +130,21 @@ def build_components(env,
                 path=classify_output_uri
             )
         },
-        code="./",  # directory with classify.py
+        code="./",
         command=(
             "python classify.py "
             "--segmented_path ${{inputs.segmented_path}} "
             "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
+            "--cluster_output ${{inputs.cluster_path}} "
             "--output_path ${{outputs.output_path}} "
-            "--num_classes 4"
+            "--num_classes 4 "
+            f"--classify_per_cluster {classify_per_cluster}"
         ),
         environment=env,
         environment_variables=env_vars,
     )
 
-    # 4) Post-process
+    # 5) Post-process
     post_process_component = command(
         name="PostProcess",
         display_name="Post-Processing",
@@ -131,7 +158,7 @@ def build_components(env,
                 path=postprocess_output_uri
             )
         },
-        code="./",  # directory with post_process.py
+        code="./",
         command=(
             "python post_process.py "
             "--segmentation_path ${{inputs.segmentation_path}} "
@@ -145,10 +172,10 @@ def build_components(env,
     return {
         "data_prep": data_prep_component,
         "segment": segment_component,
+        "cluster": cluster_component,
         "classify": classify_component,
         "post_process": post_process_component
     }
-
 
 def run_pipeline():
     # --------------------------------------------------
@@ -158,34 +185,43 @@ def run_pipeline():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["prep_only", "rest_only", "full", "classify_only"],
+        choices=[
+            "prep_only",
+            "rest_only",
+            "full",
+            "classify_only",
+            "rest_cluster"
+        ],
         default="full",
-        help="Which pipeline to run: prep_only, rest_only, classify_only, or full."
+        help=("Which pipeline to run: "
+              "prep_only, rest_only, classify_only, full, or rest_cluster.")
     )
-    # Input path to raw slides (when we do data prep)
     parser.add_argument(
         "--raw_slides_uri",
         type=str,
         default="azureml://datastores/workspaceblobstore/paths/UI/2025-03-05_125751_UTC/",
         help="URI folder of raw slides (for data prep)."
     )
-    # Input path to prepped data (when we skip data prep)
     parser.add_argument(
         "--prepped_data_uri",
         type=str,
         default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/",
         help="URI folder of already-prepped tiles."
     )
-
     parser.add_argument(
         "--segmented_data_uri",
         type=str,
         default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/",
         help="URI folder of already-segmented tiles (for classify_only mode)."
     )
+    parser.add_argument(
+        "--classify_per_cluster",
+        type=int,
+        default=10,
+        help="Number of bounding boxes per cluster to classify."
+    )
 
     args = parser.parse_args()
-
     logging.info("Parsed arguments: %s", args)
 
     # --------------------------------------------------
@@ -194,9 +230,10 @@ def run_pipeline():
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     logging.info("Timestamp for outputs: %s", timestamp)
 
-    # Build unique paths
+    # Build unique paths for each step
     data_prep_output_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs/data_prep/"
     segment_output_uri   = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs/segment/"
+    cluster_output_uri   = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs/cluster/"
     classify_output_uri  = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs/classify/"
     postprocess_output_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs/postprocess/"
 
@@ -219,7 +256,7 @@ def run_pipeline():
     env = Environment(
         name="edu06_env",
         conda_file="environment.yml",
-        image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
+        image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest"
     )
     logging.info("Creating/updating environment: %s", env.name)
     ml_client.environments.create_or_update(env)
@@ -232,8 +269,10 @@ def run_pipeline():
         env=env,
         data_prep_output_uri=data_prep_output_uri,
         segment_output_uri=segment_output_uri,
+        cluster_output_uri=cluster_output_uri,
         classify_output_uri=classify_output_uri,
-        postprocess_output_uri=postprocess_output_uri
+        postprocess_output_uri=postprocess_output_uri,
+        classify_per_cluster=args.classify_per_cluster
     )
 
     # --------------------------------------------------
@@ -255,14 +294,15 @@ def run_pipeline():
         seg_step = components["segment"](prepped_tiles_path=prepped_tiles_input)
         cls_step = components["classify"](
             segmented_path=seg_step.outputs.output_path,
-            prepped_tiles_path=prepped_tiles_input
+            prepped_tiles_path=prepped_tiles_input,
+            cluster_path=""  # Not using clustering here
         )
         post_step = components["post_process"](
             segmentation_path=seg_step.outputs.output_path,
             classification_path=cls_step.outputs.output_path
         )
         return {"final_output": post_step.outputs.output_path}
-    
+
     @pipeline(
         compute=COMPUTE_CLUSTER,
         description="Pipeline for classification + postprocess (requires prepped + segmented data)."
@@ -270,7 +310,8 @@ def run_pipeline():
     def classify_only_pipeline(prepped_tiles_input, segmented_input):
         cls_step = components["classify"](
             segmented_path=segmented_input,
-            prepped_tiles_path=prepped_tiles_input
+            prepped_tiles_path=prepped_tiles_input,
+            cluster_path=""  # Not using clustering
         )
         post_step = components["post_process"](
             segmentation_path=segmented_input,
@@ -287,13 +328,34 @@ def run_pipeline():
         seg_step = components["segment"](prepped_tiles_path=prep_step.outputs.output_path)
         cls_step = components["classify"](
             segmented_path=seg_step.outputs.output_path,
-            prepped_tiles_path=prep_step.outputs.output_path
+            prepped_tiles_path=prep_step.outputs.output_path,
+            cluster_path=""  # Not using cluster in the legacy 'full' pipeline
         )
         post_step = components["post_process"](
             segmentation_path=seg_step.outputs.output_path,
             classification_path=cls_step.outputs.output_path
         )
         return {"final_output": post_step.outputs.output_path}
+
+    @pipeline(
+        compute=COMPUTE_CLUSTER,
+        description="Pipeline for segmentation -> DBSCAN clustering -> classification -> post-process"
+    )
+    def seg_cluster_cls_pipeline(prepped_tiles_input):
+        seg_step = components["segment"](prepped_tiles_path=prepped_tiles_input)
+        cluster_step = components["cluster"](segmentation_path=seg_step.outputs.output_path)
+        cls_step = components["classify"](
+            segmented_path=seg_step.outputs.output_path,
+            prepped_tiles_path=prepped_tiles_input,
+            cluster_path=cluster_step.outputs.cluster_output
+        )
+        post_step = components["post_process"](
+            segmentation_path=seg_step.outputs.output_path,
+            classification_path=cls_step.outputs.output_path
+        )
+        return {
+            "final_output": post_step.outputs.output_path
+        }
 
     # --------------------------------------------------
     # 7. Build & submit the chosen pipeline
@@ -318,6 +380,12 @@ def run_pipeline():
         )
         experiment_name = "histology_classify_only"
 
+    elif args.mode == "rest_cluster":
+        pipeline_job = seg_cluster_cls_pipeline(
+            prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri)
+        )
+        experiment_name = "histology_rest_cluster"
+
     else:  # args.mode == "full"
         pipeline_job = full_pipeline(
             raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri)
@@ -326,7 +394,7 @@ def run_pipeline():
 
     logging.info("Submitting pipeline job to Azure ML...")
     submitted_job = ml_client.jobs.create_or_update(
-        pipeline_job, 
+        pipeline_job,
         experiment_name=experiment_name
     )
     logging.info("%s pipeline submitted! View here: %s", args.mode, submitted_job.studio_url)

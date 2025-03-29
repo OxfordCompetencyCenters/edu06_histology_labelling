@@ -88,6 +88,8 @@ def main():
                 "label_id": lbl_id,
                 "polygon": poly_info["polygon"],
                 "pred_class": classified_cell["pred_class"],
+                "cluster_id": classified_cell.get("cluster_id"),
+                "cluster_confidence": classified_cell.get("cluster_confidence"),
                 "bbox": classified_cell["bbox"]
             })
 

@@ -28,7 +28,6 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels):
     logging.info(f"Saved mask to {mask_path}")
 
     # 3) Derive bounding boxes from the actual mask values
-    #    (no relabeling step => original Cellpose IDs remain intact)
     bboxes = []
     unique_labels = np.unique(masks)
     for lbl in unique_labels:
@@ -37,7 +36,6 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels):
         coords = np.argwhere(masks == lbl)
         if coords.size == 0:
             continue
-        # Rows and cols are the first and second columns of coords
         min_row, max_row = coords[:, 0].min(), coords[:, 0].max()
         min_col, max_col = coords[:, 1].min(), coords[:, 1].max()
 
@@ -72,7 +70,7 @@ def main():
     os.makedirs(args.output_path, exist_ok=True)
 
     logging.info(f"Initializing Cellpose model of type: {args.model_type}")
-    model = models.Cellpose(model_type=args.model_type)
+    model = models.Cellpose(model_type=args.model_type, gpu=True)
 
     channels = [args.chan, args.chan2]
     logging.info(f"Using channels: {channels}")

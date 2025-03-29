@@ -1,9 +1,13 @@
 name: edu06_env
 channels:
+  - rapidsai
   - conda-forge
+  - nvidia
   - defaults
 dependencies:
-  - python=3.9
+  - python=3.10
+  - cudatoolkit=11.8
+  - rapids=23.10
   - openslide
   - openslide-python
   - pip
