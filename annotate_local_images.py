@@ -85,12 +85,13 @@ def annotate_images(json_file, images_dir, output_dir,
             # If at least one of them is drawn, add the label once
             if draw_bbox_flag or draw_polygon_flag:
                 # Only the class label is shown
-                label_str = f"C:{pred_class}, id:{cell['label_id']}"
+                # label_str = f"C:{pred_class}, id:{cell['label_id']}"
+                label_str = f"c:{pred_class} cl:{cell['cluster_id']}, p:{cell['cluster_confidence']:.2f}"
                 x_min, y_min, _, _ = bbox
                 # Place text just above the top-left of the bounding box
                 cv2.putText(img,
                             label_str,
-                            (x_min, max(0, y_min - 5)),
+                            (max(0, x_min - 20), max(0, y_min - 5)),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             text_scale,
                             (255, 255, 255),

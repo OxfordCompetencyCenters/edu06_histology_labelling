@@ -215,9 +215,40 @@ def main():
                 })
 
     # Write out JSON with classification results
+    # ------------------------------------------------------------------
+    # Restructure results
+    # ------------------------------------------------------------------
+    logging.info("Restructuring classification results...")
+    grouped_by_tile = {}
+    for result in classification_results:
+        tile_path = result["tile_path"]
+
+        if tile_path not in grouped_by_tile:
+            grouped_by_tile[tile_path] = {
+                "tile_path": result["tile_path"],
+                "tile_name": result["tile_name"],
+                "slide_name": result["slide_name"],
+                "classified_cells": []
+            }
+
+        cell_data = {
+            "label_id": result["label_id"],
+            "bbox": result["bbox"],
+            "bbox_file": result["bbox_file"],
+            "pred_class": result["pred_class"]
+        }
+        if "cluster_id" in result:
+            cell_data["cluster_id"] = result["cluster_id"]
+        if "cluster_confidence" in result:
+            cell_data["cluster_confidence"] = result["cluster_confidence"]
+
+        grouped_by_tile[tile_path]["classified_cells"].append(cell_data)
+
+    final_output_data = list(grouped_by_tile.values())
+
     out_file = os.path.join(args.output_path, "classification_results.json")
     with open(out_file, "w") as f:
-        json.dump(classification_results, f, indent=2)
+        json.dump(final_output_data, f, indent=2)
 
     logging.info("Classification step complete via GPT-4o. Output: %s", out_file)
 
