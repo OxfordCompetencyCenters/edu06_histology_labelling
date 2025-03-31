@@ -82,7 +82,7 @@ def main():
                         help="Path to segmentation results (masks + *_bboxes.json).")
     parser.add_argument("--prepped_tiles_path", type=str,
                         help="Path to the original prepped tile images.")
-    parser.add_argument("--cluster_output", type=str, default="",
+    parser.add_argument("--clustered_cells_path", type=str, default="",
                         help="Path to cluster output (containing cluster_assignments.json).")
     parser.add_argument("--output_path", type=str,
                         help="Path for classification results.")
@@ -104,12 +104,12 @@ def main():
     classification_results = []
 
     # ------------------------------------------------------------------
-    # (A) If cluster_output is provided, we read cluster_assignments.json
+    # (A) If clustered_cells_path is provided, we read cluster_assignments.json
     #     and select bounding boxes from it to classify, grouping by
     #     (cluster_id, slide_name).
     # ------------------------------------------------------------------
-    cluster_assignments_path = os.path.join(args.cluster_output, "cluster_assignments.json")
-    if args.cluster_output and os.path.exists(cluster_assignments_path):
+    cluster_assignments_path = os.path.join(args.clustered_cells_path, "cluster_assignments.json")
+    if args.clustered_cells_path and os.path.exists(cluster_assignments_path):
         logging.info("Using cluster assignments from %s to select bounding boxes.", cluster_assignments_path)
 
         with open(cluster_assignments_path, "r") as f:

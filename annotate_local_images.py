@@ -65,12 +65,13 @@ def annotate_images(json_file, images_dir, output_dir,
         if random_labels:
             random.shuffle(cells)
 
-        # Limit to max_labels
-        cells_to_draw = cells[:max_labels]
-
         # Draw bounding boxes/polygons for the selected cells
-        for cell in cells_to_draw:
+        label_count = 0
+        for cell in cells:
             pred_class = cell["pred_class"]
+            if len(pred_class.split()) > 1:
+                # pred_class = "undetermined"
+                continue
             bbox = cell["bbox"]       # [x_min, y_min, x_max, y_max]
             polygon = cell["polygon"] # list of [x, y]
 
@@ -93,7 +94,11 @@ def annotate_images(json_file, images_dir, output_dir,
                             cv2.FONT_HERSHEY_SIMPLEX,
                             text_scale,
                             (255, 255, 255),
-                            2)
+                            1,
+                            cv2.LINE_AA)
+            label_count += 1
+            if label_count >= max_labels:
+                break
 
         # Save the annotated image
         out_filename = os.path.basename(subpath)
