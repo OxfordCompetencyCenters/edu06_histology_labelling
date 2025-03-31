@@ -61,8 +61,8 @@ def main():
 
     for tile_result in classification_results:
         tile_path = tile_result["tile_path"]
-        parent_dir = os.path.basename(os.path.dirname(tile_path))
-        tile_name = os.path.splitext(os.path.basename(tile_path))[0]
+        parent_dir = tile_result["slide_name"]
+        tile_name = tile_result["tile_name"]
         mask_name = tile_name + "_mask.png"
         mask_path = os.path.join(args.segmentation_path, parent_dir, mask_name)
         if not os.path.exists(mask_path):

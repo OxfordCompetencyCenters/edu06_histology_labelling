@@ -195,7 +195,7 @@ def build_components(env,
             "python classify.py "
             "--segmented_path ${{inputs.segmented_path}} "
             "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-            "--cluster_output ${{inputs.cluster_path}} "
+            "--clustered_cells_path ${{inputs.cluster_path}} "
             "--output_path ${{outputs.output_path}} "
             "--num_classes 4 "
             f"--classify_per_cluster {classify_per_cluster}"

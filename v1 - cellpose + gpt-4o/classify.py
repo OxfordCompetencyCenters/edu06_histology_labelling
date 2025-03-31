@@ -45,9 +45,10 @@ def classify_bbox_gpt4o(client, tile_image, bbox):
             {
                 "role": "system",
                 "content": (
-                    "Take the role of a highly experienced histopathologist expert. "
+                    "Take the role of a highly experienced histology expert. "
                     "When given an image of a cell, you must identify the correct cell type. "
                     "**Respond with exactly one label from the list and no additional explanation.**"
+                    "Say 'undetermined' if you cannot identify the cell type."
                 )
             },
             {
@@ -136,17 +137,7 @@ def main():
         # We'll group them by tile_path for efficiency, so we only open each tile once.
         tile_img_cache = {}
 
-        def get_tile_image(bbox_file):
-            """
-            Derives tile image path from bbox_file and loads it from prepped_tiles_path.
-            E.g. if bbox_file is something like:
-                /.../segment_output/subdir/tileXYZ_bboxes.json
-            we'll guess tileXYZ.png is in:
-                prepped_tiles_path/subdir/tileXYZ.png
-            """
-            tile_name_local = os.path.basename(bbox_file).replace("_bboxes.json", ".png")
-            sub_dir = os.path.basename(os.path.dirname(bbox_file))
-            tile_path = os.path.join(args.prepped_tiles_path, sub_dir, tile_name_local)
+        def get_tile_image(tile_path, bbox_file):
             if not os.path.exists(tile_path):
                 logging.warning("Tile image not found at %s. Bbox file: %s", tile_path, bbox_file)
                 return None
@@ -158,8 +149,11 @@ def main():
             bbox_file = entry["bbox_file"]
             label_id = entry["label_id"]
             bbox = entry["bbox"]
+            tile_file = os.path.basename(bbox_file).replace("_bboxes.json", ".png")
+            sub_dir = os.path.basename(os.path.dirname(bbox_file))
+            tile_path = os.path.join(args.prepped_tiles_path, sub_dir, tile_file)
 
-            tile_img = get_tile_image(bbox_file)
+            tile_img = get_tile_image(tile_path, bbox_file)
             if tile_img is None:
                 # skip if we can't load the tile
                 continue
@@ -169,6 +163,9 @@ def main():
 
             classification_results.append({
                 "bbox_file": bbox_file,
+                "tile_path": tile_path,
+                "slide_name": sub_dir,
+                "tile_name": tile_file.replace(".png", ""),
                 "label_id": label_id,
                 "bbox": bbox,
                 "cluster_id": entry["cluster_id"],
