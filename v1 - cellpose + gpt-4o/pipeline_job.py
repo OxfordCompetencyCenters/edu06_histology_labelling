@@ -167,7 +167,10 @@ def build_components(env,
             "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER)
         },
         outputs={
-            "cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri)
+            "cluster_output": Output(
+                type=AssetTypes.URI_FOLDER,
+                path=cluster_output_uri
+            )
         },
         code="./",  # directory with your updated cluster.py
         command=cluster_cmd_string, # Use the dynamically built command

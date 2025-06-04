@@ -46,9 +46,9 @@ def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, en
 def build_sam_med_segment_command(sam_checkpoint: str, device: str = "cuda") -> str:
     """Build the command string for the sam_med segment component."""
     return (
-        f"python segment_sam_med.py "
-        f"--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-        f"--output_path ${{outputs.segment_output}} "
+        "python segment_sam_med.py "
+        "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
+        "--output_path ${{outputs.segment_output}} "
         f"--sam_checkpoint {sam_checkpoint} "
         f"--device {device}"
     )
@@ -193,12 +193,12 @@ def build_components(
         outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri)},
         code="./",
         command=(
-            f"python classify.py "
-            f"--segmented_path ${{inputs.segmented_path}} "
-            f"--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-            f"--clustered_cells_path ${{inputs.cluster_path}} "
-            f"--output_path ${{outputs.output_path}} "
-            f"--num_classes 4 "
+            "python classify.py "
+            "--segmented_path ${{inputs.segmented_path}} "
+            "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
+            "--clustered_cells_path ${{inputs.cluster_path}} "
+            "--output_path ${{outputs.output_path}} "
+            "--num_classes 4 "
             f"--classify_per_cluster {classify_per_cluster}"
         ),
         environment=env,
@@ -216,11 +216,11 @@ def build_components(
         outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},
         code="./",
         command=(
-            f"python post_process.py "
-            f"--segmentation_path ${{inputs.segmentation_path}} "
-            f"--classification_path ${{inputs.classification_path}} "
-            f"--output_path ${{outputs.output_path}} "
-            f"--generate_analytics"
+            "python post_process.py "
+            "--segmentation_path ${{inputs.segmentation_path}} "
+            "--classification_path ${{inputs.classification_path}} "
+            "--output_path ${{outputs.output_path}} "
+            "--generate_analytics"
         ),
         environment=env,
     )
