@@ -1,0 +1,73 @@
+name: edu06_env_v2_gpu
+channels:
+  - rapidsai        # Highest priority for RAPIDS (cuML, cuPy, cuDF)
+  - conda-forge     # Good source for umap-learn, opencv, and scientific packages
+  - nvidia          # For CUDA related components
+  - defaults
+dependencies:
+  - python=3.10
+  
+  # GPU Acceleration - RAPIDS ecosystem for GPU clustering
+  - rapids=23.10     # Installs cuML, cuDF, cuPy etc compatible with CUDA 11.x
+  - cudatoolkit=11.8 # Ensure CUDA compatibility
+  
+  # Core Scientific Computing
+  - numpy>=1.24.0
+  - scipy>=1.10.0
+  - scikit-learn>=1.3.0  # For CPU fallback clustering
+  - pandas>=2.0.0
+  
+  # Computer Vision and Image Processing
+  - opencv>=4.8.0          # For image operations
+  - pillow>=9.5.0          # For PIL Image processing
+  - scikit-image>=0.20.0   # Additional image processing
+  
+  # Dimensionality Reduction and Clustering
+  - umap-learn>=0.5.4      # CPU UMAP (GPU version comes with cuML)
+  - hdbscan>=0.8.0         # Additional clustering algorithm
+  
+  # Visualization and Analysis
+  - matplotlib>=3.7.0      # For visualizations
+  - seaborn>=0.12.0        # Enhanced plotting
+  - kneed                  # For automatic elbow finding
+  
+  # Medical Imaging
+  - openslide              # C library for slide reading
+  - openslide-python       # Python wrapper
+  
+  # Build tools
+  - pip
+  - git
+  
+  - pip:
+    # Azure ML dependencies
+    - azure-ai-ml>=1.12.0
+    - azure-identity>=1.12.0
+    - azure-keyvault-secrets
+    
+    # PyTorch with CUDA support
+    - torch==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+    - torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
+    - torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+    
+    # Transformer Models and Vision
+    - transformers>=4.30.0
+    - timm>=0.9.0              # Additional vision models
+    - accelerate>=0.20.0       # Hugging Face model optimization
+    
+    # SAM and Medical AI Models
+    - segment-anything>=1.0
+    - git+https://github.com/facebookresearch/dinov2.git
+    
+    # Spatial Processing and CRF
+    - pydensecrf>=1.0.2        # For CRF spatial smoothing
+    
+    # OpenAI Integration
+    - openai>=1.0.0
+    
+    # Legacy support (if needed for compatibility)
+    - cellpose==3.1.1          # Keep for potential fallback
+    
+    # Additional utilities
+    - tqdm>=4.65.0             # Progress bars
+    - psutil>=5.9.0            # System monitoring
