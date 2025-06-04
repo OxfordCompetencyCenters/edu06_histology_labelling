@@ -9,7 +9,7 @@ from token_clustering_dbscan import TokenClusteringPipeline
 
 
 def main():
-    """Main clustering function using sam-med token clustering."""
+    """Main clustering function using sam_med token clustering."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",

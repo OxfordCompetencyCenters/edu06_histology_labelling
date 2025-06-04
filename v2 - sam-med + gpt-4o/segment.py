@@ -10,7 +10,7 @@ from segment_sam_med import SAMMedSegmenter
 
 def segment_and_extract_bboxes(img_path: str, model: SAMMedSegmenter, out_dir: str):
     """
-    Runs SAM-Med segmentation on a single tile.
+    Runs sam_med segmentation on a single tile.
     Saves the resulting mask as a PNG and extracts bounding boxes.
     
     Args:
@@ -22,13 +22,13 @@ def segment_and_extract_bboxes(img_path: str, model: SAMMedSegmenter, out_dir: s
     img = np.array(Image.open(img_path))
     logging.info(f"Segmenting tile: {img_path}")
 
-    # Use SAM-Med segmentation
-    logging.info("Using SAM-Med segmentation")
+    # Use sam_med segmentation
+    logging.info("Using sam_med segmentation")
     try:
         results = model.segment_image(img_path, use_grid_prompts=True, use_adaptive_prompts=True)
         masks = results.get('combined_mask', np.zeros_like(img[:,:,0] if len(img.shape) == 3 else img))
     except Exception as e:
-        logging.warning(f"SAM-Med segmentation failed: {e}, creating empty mask")
+        logging.warning(f"sam_med segmentation failed: {e}, creating empty mask")
         masks = np.zeros_like(img[:,:,0] if len(img.shape) == 3 else img)
 
     # Save the mask to disk
@@ -63,14 +63,14 @@ def segment_and_extract_bboxes(img_path: str, model: SAMMedSegmenter, out_dir: s
     logging.info(f"Saved bounding boxes to {bbox_path}")
 
 def main():
-    """Main segmentation function using SAM-Med."""
+    """Main segmentation function using sam_med."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    parser = argparse.ArgumentParser(description="Advanced histology segmentation using SAM-Med")
+    parser = argparse.ArgumentParser(description="Advanced histology segmentation using sam_med")
     parser.add_argument("--prepped_tiles_path", type=str, required=True, help="Path to preprocessed tiles")
     parser.add_argument("--output_path", type=str, required=True, help="Output directory for masks and bboxes")
     parser.add_argument("--sam_checkpoint", type=str, default="sam_med2d_b.pth", 
@@ -80,10 +80,10 @@ def main():
     
     os.makedirs(args.output_path, exist_ok=True)
 
-    # Initialize SAM-Med model
-    logging.info(f"Initializing SAM-Med with checkpoint: {args.sam_checkpoint}")
+    # Initialize sam_med model
+    logging.info(f"Initializing sam_med with checkpoint: {args.sam_checkpoint}")
     model = SAMMedSegmenter(checkpoint_name=args.sam_checkpoint)
-    logging.info("SAM-Med model loaded successfully")
+    logging.info("sam_med model loaded successfully")
 
     # Process all slide directories
     slide_dirs = [d for d in os.listdir(args.prepped_tiles_path) 

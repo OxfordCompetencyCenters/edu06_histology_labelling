@@ -53,7 +53,7 @@ class ModelSetup:
         ]
         
         optional_packages = [
-            ("segment_anything", "SAM-Med segmentation"),
+            ("segment_anything", "sam_med segmentation"),
             ("pydensecrf", "CRF smoothing"),
             ("hdbscan", "HDBSCAN clustering"),
             ("cuml", "GPU-accelerated clustering")
@@ -225,7 +225,7 @@ class ModelSetup:
     
     def run_setup(self, sam_models: List[str] = ["sam_vit_h"]):
         """Run the complete setup process."""
-        logging.info("Starting setup for sam-med Histology Analysis Pipeline...")
+        logging.info("Starting setup for sam_med Histology Analysis Pipeline...")
         
         # Check dependencies
         logging.info("\n1. Checking dependencies...")
@@ -263,7 +263,7 @@ class ModelSetup:
         """Test if pipeline components can be imported and initialized."""
         tests = [
             ("Data preparation", self.test_data_prep),
-            ("SAM-Med segmentation", self.test_sam_med),
+            ("sam_med segmentation", self.test_sam_med),
             ("Token clustering", self.test_token_clustering),
             ("Traditional clustering", self.test_traditional_clustering)
         ]
@@ -293,7 +293,7 @@ class ModelSetup:
             return False
     
     def test_sam_med(self) -> bool:
-        """Test SAM-Med components."""
+        """Test sam_med components."""
         try:
             # Check if segment-anything is available
             import segment_anything
@@ -330,7 +330,7 @@ class ModelSetup:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Setup sam-med Histology Analysis Pipeline")
+    parser = argparse.ArgumentParser(description="Setup sam_med Histology Analysis Pipeline")
     parser.add_argument("--models", nargs="+", 
                        choices=["sam_vit_h", "sam_vit_l", "sam_vit_b"],
                        default=["sam_vit_h"],

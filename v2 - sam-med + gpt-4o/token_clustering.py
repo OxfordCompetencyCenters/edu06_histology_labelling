@@ -175,7 +175,7 @@ class TokenClusteringPipeline:
                       umap_n_neighbors: int = 15, umap_min_dist: float = 0.1) -> np.ndarray:
         """
         Cluster token features with optional UMAP dimensionality reduction and GPU acceleration.
-        sam-med for histology data with optimal parameters.
+        sam_med for histology data with optimal parameters.
         """
         h, w, d = spatial_features.shape
         flattened_features = spatial_features.reshape(-1, d)

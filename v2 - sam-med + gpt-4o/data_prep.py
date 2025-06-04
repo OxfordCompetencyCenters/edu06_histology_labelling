@@ -29,7 +29,7 @@ def calculate_tissue_ratio(tile_rgb):
 
 def tile_slide_multi_resolution(slide_path, out_dir, tile_sizes=[256, 512], overlap=0, target_mpp=0.5):
     """
-    sam-med tiling function that creates tiles at multiple resolutions.
+    sam_med tiling function that creates tiles at multiple resolutions.
     Generates both 256x256 tiles for token clustering and 512x512 for traditional analysis.
     
     Args:
@@ -224,7 +224,7 @@ def create_tissue_mask_and_metadata(slide, slide_name, out_dir, level):
 def tile_slide(slide_path, out_dir, tile_size=512, overlap=0):
     """
     Legacy function for backward compatibility.
-    Calls the sam-med multi-resolution tiling with single tile size.
+    Calls the sam_med multi-resolution tiling with single tile size.
     """
     tile_slide_multi_resolution(slide_path, out_dir, [tile_size], overlap)
 
@@ -235,7 +235,7 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    parser = argparse.ArgumentParser(description="sam-med data preparation for histology analysis")
+    parser = argparse.ArgumentParser(description="sam_med data preparation for histology analysis")
     parser.add_argument("--input_data", type=str, required=True,
                         help="Path to folder with NDPI (or SVS) data.")
     parser.add_argument("--output_path", type=str, required=True,
@@ -258,7 +258,7 @@ def main():
         if args.tile_size not in args.tile_sizes:
             args.tile_sizes.append(args.tile_size)
 
-    logging.info("Starting sam-med data prep with arguments: %s", args)
+    logging.info("Starting sam_med data prep with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
 
     # Find slide files
@@ -288,7 +288,7 @@ def main():
             logging.error(f"Error processing {slide_path}: {e}")
             continue
 
-    logging.info("sam-med data prep step done. Tiles saved to: %s", args.output_path)
+    logging.info("sam_med data prep step done. Tiles saved to: %s", args.output_path)
 
 if __name__ == "__main__":
     main()

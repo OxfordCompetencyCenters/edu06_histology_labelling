@@ -10,27 +10,27 @@ from typing import List, Tuple, Dict
 import random
 
 try:
-    # Import SAM-Med components
+    # Import sam_med components
     from segment_anything import SamPredictor, sam_model_registry
     from segment_anything.utils.transforms import ResizeLongestSide
     HAS_SAM = True
 except ImportError:
     HAS_SAM = False
-    logging.warning("SAM not available. Install segment-anything to use SAM-Med features.")
+    logging.warning("SAM not available. Install segment-anything to use sam_med features.")
 
 class SAMMedSegmentor:
-    """SAM-Med based segmentation with prompt generation for histology images."""
+    """sam_med based segmentation with prompt generation for histology images."""
     
     def __init__(self, model_type="vit_h", checkpoint_path=None, device="cuda"):
         self.device = device
         self.model_type = model_type
         
         if not HAS_SAM:
-            raise ImportError("segment-anything is required for SAM-Med segmentation")
+            raise ImportError("segment-anything is required for sam_med segmentation")
             
         # Load SAM model
         if checkpoint_path is None:
-            # You'll need to download SAM-Med weights or use regular SAM
+            # You'll need to download sam_med weights or use regular SAM
             checkpoint_path = "sam_vit_h_4b8939.pth"  # Default SAM checkpoint
             
         self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
@@ -167,7 +167,7 @@ class SAMMedSegmentor:
 
 def segment_and_extract_sam_med(img_path: str, segmentor: SAMMedSegmentor, out_dir: str) -> None:
     """
-    Run SAM-Med segmentation on a single tile and extract bounding boxes.
+    Run sam_med segmentation on a single tile and extract bounding boxes.
     """
     tile_name = os.path.splitext(os.path.basename(img_path))[0]
     
@@ -175,7 +175,7 @@ def segment_and_extract_sam_med(img_path: str, segmentor: SAMMedSegmentor, out_d
     img_pil = Image.open(img_path).convert("RGB")
     img_np = np.array(img_pil)
     
-    logging.info(f"Segmenting tile with SAM-Med: {img_path}")
+    logging.info(f"Segmenting tile with sam_med: {img_path}")
     
     try:
         # Segment the image
@@ -186,7 +186,7 @@ def segment_and_extract_sam_med(img_path: str, segmentor: SAMMedSegmentor, out_d
         mask_filename = f"{tile_name}_sam_mask.png"
         mask_path = os.path.join(out_dir, mask_filename)
         mask_img.save(mask_path)
-        logging.info(f"Saved SAM-Med mask to {mask_path}")
+        logging.info(f"Saved sam_med mask to {mask_path}")
         
         # Save bounding boxes
         bbox_filename = f"{tile_name}_sam_bboxes.json"
@@ -205,7 +205,7 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     
-    parser = argparse.ArgumentParser(description="SAM-Med based segmentation for histology tiles")
+    parser = argparse.ArgumentParser(description="sam_med based segmentation for histology tiles")
     parser.add_argument("--input_path", type=str, required=True,
                        help="Path to prepped data (tiled images).")
     parser.add_argument("--output_path", type=str, required=True,
@@ -224,7 +224,7 @@ def main():
         logging.error("segment-anything is required but not installed. Please install it first.")
         return
     
-    logging.info("Starting SAM-Med segmentation with arguments: %s", args)
+    logging.info("Starting sam_med segmentation with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
     
     # Initialize segmentor
@@ -234,9 +234,9 @@ def main():
             checkpoint_path=args.sam_checkpoint,
             device=args.device
         )
-        logging.info(f"Initialized SAM-Med segmentor with model type: {args.model_type}")
+        logging.info(f"Initialized sam_med segmentor with model type: {args.model_type}")
     except Exception as e:
-        logging.error(f"Failed to initialize SAM-Med segmentor: {e}")
+        logging.error(f"Failed to initialize sam_med segmentor: {e}")
         return
     
     # Find all tile images
@@ -255,7 +255,7 @@ def main():
         
         segment_and_extract_sam_med(tile_file, segmentor, tile_out_dir)
     
-    logging.info("SAM-Med segmentation completed. Output saved to: %s", args.output_path)
+    logging.info("sam_med segmentation completed. Output saved to: %s", args.output_path)
 
 if __name__ == "__main__":
     main()
