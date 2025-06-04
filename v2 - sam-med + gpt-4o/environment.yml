@@ -28,7 +28,7 @@ dependencies:
   
   # Visualization and Analysis
   - matplotlib>=3.7.0      # For visualizations
-  - seaborn>=0.12.0        # Enhanced plotting
+  - seaborn>=0.12.0        # sam-med plotting
   - kneed                  # For automatic elbow finding
   
   # Medical Imaging

@@ -225,7 +225,7 @@ class ModelSetup:
     
     def run_setup(self, sam_models: List[str] = ["sam_vit_h"]):
         """Run the complete setup process."""
-        logging.info("Starting setup for Enhanced Histology Analysis Pipeline...")
+        logging.info("Starting setup for sam-med Histology Analysis Pipeline...")
         
         # Check dependencies
         logging.info("\n1. Checking dependencies...")
@@ -330,7 +330,7 @@ class ModelSetup:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Setup Enhanced Histology Analysis Pipeline")
+    parser = argparse.ArgumentParser(description="Setup sam-med Histology Analysis Pipeline")
     parser.add_argument("--models", nargs="+", 
                        choices=["sam_vit_h", "sam_vit_l", "sam_vit_b"],
                        default=["sam_vit_h"],

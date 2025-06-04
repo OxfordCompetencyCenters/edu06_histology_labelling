@@ -25,8 +25,8 @@ RESOURCE_GROUP = "AIMLCC-DEV-RG"
 WORKSPACE_NAME = "edu06_histology_img_segmentation"
 COMPUTE_CLUSTER = "edu06-gpu-compute-cluster"
 
-def build_enhanced_data_prep_command(tile_sizes: List[int], target_mpp: float, enable_multi_resolution: bool) -> str:
-    """Build enhanced data preparation command with multi-resolution support."""
+def build_sam-med_data_prep_command(tile_sizes: List[int], target_mpp: float, enable_multi_resolution: bool) -> str:
+    """Build sam-med data preparation command with multi-resolution support."""
     cmd_parts = [
         "python data_prep.py",
         "--input_data ${{inputs.input_data}}",
@@ -100,7 +100,7 @@ def build_components(
     classify_output_uri: str,
     postprocess_output_uri: str,
     classify_per_cluster: int,
-    # Enhanced Parameters
+    # sam-med Parameters
     sam_checkpoint: str,
     tile_sizes: List[int],
     target_mpp: float,
@@ -122,16 +122,16 @@ def build_components(
     
     logging.info("Building pipeline components...")
     
-    # 1. Enhanced Data Preparation
-    data_prep_cmd = build_enhanced_data_prep_command(
+    # 1. sam-med Data Preparation
+    data_prep_cmd = build_sam-med_data_prep_command(
         tile_sizes=tile_sizes,
         target_mpp=target_mpp,
         enable_multi_resolution=enable_multi_resolution
     )
     
     data_prep_component = command(
-        name="EnhancedDataPrep",
-        display_name="Enhanced Data Prep with Multi-Resolution",
+        name="sam-medDataPrep",
+        display_name="sam-med Data Prep with Multi-Resolution",
         inputs={"input_data": Input(type=AssetTypes.URI_FOLDER)},
         outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri)},
         code="./",
@@ -183,7 +183,7 @@ def build_components(
     # 4. Classification
     env_vars = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
     classify_component = command(
-        name="EnhancedClassification",
+        name="sam-medClassification",
         display_name="GPT-4o Cell Classification",
         inputs={
             "segmented_path": Input(type=AssetTypes.URI_FOLDER),
@@ -207,7 +207,7 @@ def build_components(
 
     # 5. Post-Processing
     post_process_component = command(
-        name="EnhancedPostProcess",
+        name="sam-medPostProcess",
         display_name="Post-Processing with Analytics",
         inputs={
             "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
@@ -236,7 +236,7 @@ def build_components(
 
 def run_pipeline():
     # Parse CLI arguments
-    parser = argparse.ArgumentParser(description="Enhanced Histology Image Analysis Pipeline on Azure ML")
+    parser = argparse.ArgumentParser(description="sam-med Histology Image Analysis Pipeline on Azure ML")
 
     # Pipeline Mode
     parser.add_argument(
@@ -262,7 +262,7 @@ def run_pipeline():
     parser.add_argument("--classify_per_cluster", type=int, default=10, 
                        help="Number of bounding boxes per cluster to classify.")
     
-    # Enhanced Data Preparation Parameters
+    # sam-med Data Preparation Parameters
     parser.add_argument("--tile_sizes", type=int, nargs="+", default=[256, 512], 
                        help="Tile sizes for multi-resolution processing")
     parser.add_argument("--target_mpp", type=float, default=0.25, 
@@ -308,7 +308,7 @@ def run_pipeline():
 
     # Generate timestamp for unique outputs
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    output_base_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_enhanced_pipeline_outputs"
+    output_base_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_sam-med_pipeline_outputs"
 
     # Build unique paths for each step
     data_prep_output_uri = f"{output_base_uri}/data_prep/"
@@ -332,7 +332,7 @@ def run_pipeline():
 
     # Create or update the environment
     env = Environment(
-        name="edu06_env_enhanced",
+        name="edu06_env_sam-med",
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest"
     )
@@ -351,7 +351,7 @@ def run_pipeline():
             classify_output_uri=classify_output_uri,
             postprocess_output_uri=postprocess_output_uri,
             classify_per_cluster=args.classify_per_cluster,
-            # Enhanced pipeline parameters
+            # sam-med pipeline parameters
             sam_checkpoint=args.sam_checkpoint,
             tile_sizes=args.tile_sizes,
             target_mpp=args.target_mpp,
@@ -371,8 +371,8 @@ def run_pipeline():
     except Exception as e:
         logging.error(f"Failed to build pipeline components: {e}")
         return    # Define pipeline functions for each mode
-    @pipeline(compute=COMPUTE_CLUSTER, description="Complete enhanced pipeline with SAM-Med and token clustering")
-    def full_enhanced_pipeline(raw_slides_input):
+    @pipeline(compute=COMPUTE_CLUSTER, description="Complete sam-med pipeline with SAM-Med and token clustering")
+    def full_sam-med_pipeline(raw_slides_input):
         prep_step = components["data_prep"](input_data=raw_slides_input)
         seg_step = components["segment"](prepped_tiles_path=prep_step.outputs.output_path)
         cluster_step = components["cluster"](
@@ -389,13 +389,13 @@ def run_pipeline():
         )
         return {"final_output": post_step.outputs.output_path}
 
-    @pipeline(compute=COMPUTE_CLUSTER, description="Enhanced data prep only")
-    def enhanced_data_prep_pipeline(raw_slides_input):
+    @pipeline(compute=COMPUTE_CLUSTER, description="sam-med data prep only")
+    def sam-med_data_prep_pipeline(raw_slides_input):
         prep_step = components["data_prep"](input_data=raw_slides_input)
         return {"prepped_data": prep_step.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="SAM-Med Segment -> Token Cluster -> Classify -> Post-process")
-    def seg_cluster_cls_enhanced_pipeline(prepped_tiles_input):
+    def seg_cluster_cls_sam-med_pipeline(prepped_tiles_input):
         seg_step = components["segment"](prepped_tiles_path=prepped_tiles_input)
         cluster_step = components["cluster"](
             segmentation_path=seg_step.outputs.segment_output,
@@ -412,7 +412,7 @@ def run_pipeline():
         return {"final_output": post_step.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Token Cluster -> Classify -> Post-process")
-    def cluster_cls_enhanced_pipeline(prepped_tiles_input, segmented_input):
+    def cluster_cls_sam-med_pipeline(prepped_tiles_input, segmented_input):
         cluster_step = components["cluster"](
             segmentation_path=segmented_input,
             prepped_tiles_path=prepped_tiles_input)
@@ -428,7 +428,7 @@ def run_pipeline():
         return {"final_output": post_step.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Classify + Post-process only")
-    def classify_only_enhanced_pipeline(prepped_tiles_input, segmented_input, cluster_input):
+    def classify_only_sam-med_pipeline(prepped_tiles_input, segmented_input, cluster_input):
         cls_step = components["classify"](
             segmented_path=segmented_input,
             prepped_tiles_path=prepped_tiles_input,
@@ -442,30 +442,30 @@ def run_pipeline():
 
     # Build and submit the pipeline
     logging.info(f"Building {args.mode} pipeline...")
-    experiment_name = f"enhanced_histology_{args.mode}_{timestamp}"
+    experiment_name = f"sam-med_histology_{args.mode}_{timestamp}"
 
     try:
         if args.mode == "prep_only":
-            pipeline_job = enhanced_data_prep_pipeline(
+            pipeline_job = sam-med_data_prep_pipeline(
                 raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri)
             )
         elif args.mode == "seg_cluster_cls":
-            pipeline_job = seg_cluster_cls_enhanced_pipeline(
+            pipeline_job = seg_cluster_cls_sam-med_pipeline(
                 prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri)
             )
         elif args.mode == "cluster_cls":
-            pipeline_job = cluster_cls_enhanced_pipeline(
+            pipeline_job = cluster_cls_sam-med_pipeline(
                 prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
                 segmented_input=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri)
             )
         elif args.mode == "classify_only":
-            pipeline_job = classify_only_enhanced_pipeline(
+            pipeline_job = classify_only_sam-med_pipeline(
                 prepped_tiles_input=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
                 segmented_input=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri),
                 cluster_input=Input(type=AssetTypes.URI_FOLDER, path=args.clustered_data_uri)
             )
         else:  # args.mode == "full"
-            pipeline_job = full_enhanced_pipeline(
+            pipeline_job = full_sam-med_pipeline(
                 raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri)
             )
 
