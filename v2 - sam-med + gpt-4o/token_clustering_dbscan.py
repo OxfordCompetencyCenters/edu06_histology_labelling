@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import cv2
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional, List
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.preprocessing import StandardScaler, normalize
 from sklearn.neighbors import NearestNeighbors
@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage
 from PIL import Image
 
+# Optional imports with graceful fallbacks
 try:
     import transformers
     from transformers import AutoModel, AutoImageProcessor
@@ -25,7 +26,7 @@ except ImportError:
 try:
     import cuml
     from cuml.manifold import UMAP as cumlUMAP
-    from cuml.cluster import KMeans as cumlKMeans, HDBSCAN as cumlHDBSCAN
+    from cuml.cluster import KMeans as cumlKMeans, DBSCAN as cumlDBSCAN
     HAS_CUML = True
 except ImportError:
     HAS_CUML = False
@@ -46,19 +47,24 @@ except ImportError:
     HAS_CRF = False
     logging.warning("pydensecrf not available. CRF smoothing will be skipped.")
 
-class TokenClusteringPipeline:
-    """
+try:
+    from kneed import KneeLocator
+    HAS_KNEED = True
+except ImportError:
+    HAS_KNEED = False
+    logging.info("kneed not available. Automatic eps estimation will use percentile fallback.")
+
+
+class TokenClusteringPipeline:    """
     Token clustering pipeline using DINOv2 or UNI encoders for histology analysis.
-    Processes 256x256 tiles to extract token maps and perform clustering.
+    Uses DBSCAN + UMAP clustering similar to v1 approach but adapted for tokens.
     """
     
     def __init__(self, model_name: str = "facebook/dinov2-large", 
-                 clustering_method: str = "kmeans", n_clusters: int = 3,
                  use_crf: bool = False, device: str = "cuda"):
         self.device = device
         self.model_name = model_name
-        self.clustering_method = clustering_method
-        self.n_clusters = n_clusters
+        self.clustering_method = "dbscan"  # Fixed to DBSCAN only
         self.use_crf = use_crf
         
         if not HAS_TRANSFORMERS:
@@ -132,166 +138,185 @@ class TokenClusteringPipeline:
         
         return spatial_features, tokens_h, tokens_w
     
-    def get_optimal_clustering_params(self, spatial_features: np.ndarray) -> Dict:
+    def find_optimal_eps(self, embeddings: np.ndarray, min_samples: int, 
+                        output_dir: str, sensitivity: float = 1.0, 
+                        fallback_percentile: float = 95.0) -> Optional[float]:
         """
-        Automatically determine optimal clustering parameters for histology data.
+        Estimate optimal eps using k-distance graph and KneeLocator.
+        Adapted from v1 clustering approach.
         """
-        h, w, d = spatial_features.shape
-        n_tokens = h * w
+        if len(embeddings) < min_samples:
+            logging.warning(f"Not enough samples ({len(embeddings)}) for k-distance (k={min_samples}). Cannot estimate eps.")
+            return None
+
+        logging.info(f"Calculating k-distance graph to find optimal eps (k={min_samples}).")
+        effective_k = min(min_samples, len(embeddings))
         
-        # Optimal parameters based on histology characteristics
-        if self.clustering_method == "hdbscan":
-            # For histology: tissues typically form coherent regions
-            min_cluster_size = max(5, n_tokens // 20)  # At least 5% of tokens per cluster
-            min_samples = max(2, min_cluster_size // 3)  # More lenient for small regions
-            
-            params = {
-                "min_cluster_size": min_cluster_size,
-                "min_samples": min_samples,
-                "cluster_selection_epsilon": 0.0,  # Let HDBSCAN decide
-                "cluster_selection_method": "eom"  # Excess of Mass for stable clusters
-            }
-        else:  # kmeans
-            # Estimate optimal k if not provided
-            if self.n_clusters == "auto":
-                # For histology: typically 2-6 distinct tissue types per tile
-                estimated_k = min(6, max(2, int(np.sqrt(n_tokens / 50))))
-                params = {"n_clusters": estimated_k}
+        try:
+            nbrs = NearestNeighbors(n_neighbors=effective_k, algorithm='auto', metric='euclidean').fit(embeddings)
+            distances, _ = nbrs.kneighbors(embeddings)
+            kth_distances = distances[:, effective_k - 1]
+            sorted_kth_distances = np.sort(kth_distances)
+
+            # Create k-distance plot
+            plt.figure(figsize=(10, 6))
+            plt.plot(sorted_kth_distances)
+            plt.title(f'k-Distance Graph (k={effective_k}) - Used for Eps Estimation')
+            plt.xlabel("Points sorted by distance to k-th neighbor")
+            plt.ylabel(f'{effective_k}-th Nearest Neighbor Distance (Epsilon candidates)')
+            plt.grid(True)
+            k_dist_plot_path = os.path.join(output_dir, "k_distance_graph.png")
+            os.makedirs(output_dir, exist_ok=True)
+            plt.savefig(k_dist_plot_path)
+            plt.close()
+            logging.info(f"Saved k-distance graph to {k_dist_plot_path}")
+
+            # Find the elbow using KneeLocator if available
+            if HAS_KNEED and len(sorted_kth_distances) >= 3:
+                x = np.arange(len(sorted_kth_distances))
+                # Filter out potential zero distances
+                first_positive_idx = np.argmax(sorted_kth_distances > 1e-9)
+                if first_positive_idx > 0:
+                    x = x[first_positive_idx:]
+                    sorted_kth_distances_filt = sorted_kth_distances[first_positive_idx:]
+                else:
+                    sorted_kth_distances_filt = sorted_kth_distances
+
+                if len(sorted_kth_distances_filt) >= 3:
+                    try:
+                        kneedle = KneeLocator(
+                            x[:len(sorted_kth_distances_filt)], 
+                            sorted_kth_distances_filt,
+                            curve="convex", 
+                            direction="increasing",
+                            S=sensitivity
+                        )
+                        if kneedle.elbow is not None:
+                            elbow_point_y = sorted_kth_distances_filt[kneedle.elbow - x[0]] if kneedle.elbow >= x[0] else None
+                        else:
+                            elbow_point_y = None
+                    except Exception as kneed_error:
+                        logging.warning(f"KneeLocator failed: {kneed_error}")
+                        elbow_point_y = None
+                else:
+                    elbow_point_y = None
             else:
-                params = {"n_clusters": self.n_clusters}
-        
-        # UMAP parameters optimized for histology
-        umap_params = {
-            "n_components": min(50, d // 2),  # Reduce to 50 or half of original dims
-            "n_neighbors": min(15, n_tokens // 10),  # Adapt to data size
-            "min_dist": 0.1,  # Tight clusters for distinct tissue types
-            "metric": "cosine"  # Good for high-dimensional embeddings        }
-        
-        return {"clustering": params, "umap": umap_params}
+                elbow_point_y = None
+
+            if elbow_point_y is not None and elbow_point_y > 1e-6:
+                logging.info(f"Automatically determined optimal eps: {elbow_point_y:.4f}")
+                return float(elbow_point_y)
+            else:
+                # Fallback to percentile
+                fallback_eps = np.percentile(sorted_kth_distances, fallback_percentile)
+                logging.warning(f"Could not find elbow. Using {fallback_percentile}th percentile: {fallback_eps:.4f}")
+                if fallback_eps < 1e-6:
+                    fallback_eps = 0.1  # Reasonable default
+                return float(fallback_eps)
+
+        except Exception as e:
+            logging.error(f"Error during k-distance calculation: {e}")
+            return None
     
-    def cluster_tokens(self, spatial_features: np.ndarray, n_clusters: int = 3,
-                      method: str = "kmeans", use_umap: bool = False, 
-                      use_gpu: bool = False, umap_n_components: int = 50,
-                      umap_n_neighbors: int = 15, umap_min_dist: float = 0.1) -> np.ndarray:
+    def cluster_tokens_dbscan(self, spatial_features: np.ndarray, 
+                             eps: Optional[float] = None, min_samples: int = 5,
+                             use_umap: bool = True, use_gpu: bool = False,
+                             umap_n_components: int = 50, umap_n_neighbors: int = 15,
+                             umap_min_dist: float = 0.1, normalize_embeddings: bool = True,
+                             output_dir: str = "") -> np.ndarray:
         """
-        Cluster token features with optional UMAP dimensionality reduction and GPU acceleration.
-        Enhanced for histology data with optimal parameters.
+        Cluster token features using DBSCAN + UMAP approach similar to v1.
         """
         h, w, d = spatial_features.shape
         flattened_features = spatial_features.reshape(-1, d)
         
-        # Get optimal parameters for histology clustering
-        optimal_params = self.get_optimal_clustering_params(spatial_features)
+        logging.info(f"Starting DBSCAN clustering on {len(flattened_features)} tokens with {d} dimensions")
         
-        # Update UMAP parameters with optimal values if using default
-        if use_umap:
-            if umap_n_components == 50:  # Using default
-                umap_n_components = optimal_params["umap"]["n_components"]
-            if umap_n_neighbors == 15:  # Using default  
-                umap_n_neighbors = optimal_params["umap"]["n_neighbors"]
-            if umap_min_dist == 0.1:  # Using default
-                umap_min_dist = optimal_params["umap"]["min_dist"]
-        
-        # Normalize features
-        if use_gpu and HAS_CUML:
-            # Use cuML GPU StandardScaler
-            import cudf
-            features_gpu = cudf.DataFrame(flattened_features)
-            from cuml.preprocessing import StandardScaler as cumlStandardScaler
-            scaler = cumlStandardScaler()
-            normalized_features = scaler.fit_transform(features_gpu).values
+        # Normalize features if requested
+        if normalize_embeddings:
+            logging.info("Applying L2 normalization to embeddings...")
+            flattened_features = normalize(flattened_features, norm='l2', axis=1)
         else:
-            # Use sklearn CPU StandardScaler
+            # Standard scaling
             scaler = StandardScaler()
-            normalized_features = scaler.fit_transform(flattened_features)
+            flattened_features = scaler.fit_transform(flattened_features)
         
         # Apply UMAP dimensionality reduction if requested
+        reduced_features = flattened_features
         if use_umap:
             logging.info(f"Applying UMAP reduction: {d} -> {umap_n_components} dimensions")
             
             if use_gpu and HAS_CUML:
-                # Use cuML GPU UMAP with optimal parameters
-                umap_reducer = cumlUMAP(
-                    n_components=umap_n_components,
-                    n_neighbors=umap_n_neighbors,
-                    min_dist=umap_min_dist,
-                    metric=optimal_params["umap"]["metric"],
-                    random_state=42
-                )
-                if isinstance(normalized_features, np.ndarray):
+                # Use cuML GPU UMAP
+                try:
                     import cudf
-                    normalized_features = cudf.DataFrame(normalized_features)
-                reduced_features = umap_reducer.fit_transform(normalized_features).values
-            elif HAS_UMAP:
-                # Use CPU UMAP with optimal parameters
+                    features_gpu = cudf.DataFrame(flattened_features)
+                    umap_reducer = cumlUMAP(
+                        n_components=umap_n_components,
+                        n_neighbors=umap_n_neighbors,
+                        min_dist=umap_min_dist,
+                        random_state=42
+                    )
+                    reduced_features = umap_reducer.fit_transform(features_gpu).values
+                    logging.info("Used GPU UMAP")
+                except Exception as e:
+                    logging.warning(f"GPU UMAP failed: {e}. Falling back to CPU UMAP")
+                    use_gpu = False
+            
+            if not use_gpu and HAS_UMAP:
+                # Use CPU UMAP
                 umap_reducer = umap.UMAP(
                     n_components=umap_n_components,
                     n_neighbors=umap_n_neighbors,
                     min_dist=umap_min_dist,
-                    metric=optimal_params["umap"]["metric"],
                     random_state=42
                 )
-                reduced_features = umap_reducer.fit_transform(normalized_features)
-            else:
+                reduced_features = umap_reducer.fit_transform(flattened_features)
+                logging.info("Used CPU UMAP")
+            elif not HAS_UMAP:
                 logging.warning("UMAP requested but not available. Skipping dimensionality reduction.")
-                reduced_features = normalized_features
-        else:
-            reduced_features = normalized_features
         
-        # Perform clustering with optimal parameters
-        if method == "kmeans":
-            # Use optimal k if n_clusters is "auto" or default
-            actual_n_clusters = optimal_params["clustering"]["n_clusters"] if n_clusters == 3 else n_clusters
-            
-            if use_gpu and HAS_CUML:
-                # Use cuML GPU KMeans
+        # Estimate eps if not provided
+        if eps is None:
+            logging.info("Estimating optimal DBSCAN eps...")
+            eps = self.find_optimal_eps(
+                reduced_features, min_samples, output_dir,
+                sensitivity=1.0, fallback_percentile=95.0
+            )
+            if eps is None or eps <= 0:
+                eps = 0.5  # Default fallback
+                logging.warning(f"Could not estimate eps. Using default: {eps}")
+        
+        logging.info(f"Using DBSCAN with eps={eps:.4f}, min_samples={min_samples}")
+        
+        # Perform DBSCAN clustering
+        if use_gpu and HAS_CUML:
+            try:
+                import cudf
                 if isinstance(reduced_features, np.ndarray):
-                    import cudf
-                    reduced_features = cudf.DataFrame(reduced_features)
-                clusterer = cumlKMeans(n_clusters=actual_n_clusters, random_state=42, n_init=10)
-                cluster_labels = clusterer.fit_predict(reduced_features).values.ravel()
-            else:
-                # Use sklearn CPU KMeans
-                if hasattr(reduced_features, 'values'):
-                    reduced_features = reduced_features.values
-                clusterer = KMeans(n_clusters=actual_n_clusters, random_state=42, n_init=10)
-                cluster_labels = clusterer.fit_predict(reduced_features)
+                    features_gpu = cudf.DataFrame(reduced_features)
+                else:
+                    features_gpu = reduced_features
                 
-        elif method == "hdbscan":
-            # Use optimal HDBSCAN parameters for histology
-            hdb_params = optimal_params["clustering"]
-            
-            if use_gpu and HAS_CUML:
-                # Use cuML GPU HDBSCAN
-                if isinstance(reduced_features, np.ndarray):
-                    import cudf
-                    reduced_features = cudf.DataFrame(reduced_features)
-                clusterer = cumlHDBSCAN(
-                    min_cluster_size=hdb_params["min_cluster_size"],
-                    min_samples=hdb_params["min_samples"],
-                    cluster_selection_epsilon=hdb_params["cluster_selection_epsilon"],
-                    cluster_selection_method=hdb_params["cluster_selection_method"]
-                )
-                cluster_labels = clusterer.fit_predict(reduced_features).values.ravel()
-            else:
-                # Use sklearn CPU HDBSCAN
-                if hasattr(reduced_features, 'values'):
-                    reduced_features = reduced_features.values
-                clusterer = HDBSCAN(
-                    min_cluster_size=hdb_params["min_cluster_size"],
-                    min_samples=hdb_params["min_samples"],
-                    cluster_selection_epsilon=hdb_params["cluster_selection_epsilon"],
-                    cluster_selection_method=hdb_params["cluster_selection_method"]
-                )
-                cluster_labels = clusterer.fit_predict(reduced_features)
-                
-            # Handle noise points (label -1) by creating a separate "background" cluster
-            if np.any(cluster_labels == -1):
-                max_label = np.max(cluster_labels[cluster_labels != -1]) if np.any(cluster_labels != -1) else -1
-                cluster_labels[cluster_labels == -1] = max_label + 1
-                logging.info(f"HDBSCAN found {np.sum(cluster_labels == max_label + 1)} noise points, assigned to background cluster")
-        else:
-            raise ValueError(f"Unknown clustering method: {method}")
+                clusterer = cumlDBSCAN(eps=eps, min_samples=min_samples)
+                cluster_labels = clusterer.fit_predict(features_gpu).values.ravel()
+                logging.info("Used GPU DBSCAN")
+            except Exception as e:
+                logging.warning(f"GPU DBSCAN failed: {e}. Falling back to CPU DBSCAN")
+                use_gpu = False
+        
+        if not use_gpu:
+            # Use sklearn CPU DBSCAN
+            clusterer = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
+            cluster_labels = clusterer.fit_predict(reduced_features)
+            logging.info("Used CPU DBSCAN")
+        
+        # Handle noise points (label -1) by creating a separate "background" cluster
+        if np.any(cluster_labels == -1):
+            max_label = np.max(cluster_labels[cluster_labels != -1]) if np.any(cluster_labels != -1) else -1
+            cluster_labels[cluster_labels == -1] = max_label + 1
+            n_noise = np.sum(cluster_labels == max_label + 1)
+            logging.info(f"DBSCAN found {n_noise} noise points, assigned to background cluster {max_label + 1}")
         
         # Ensure cluster_labels is numpy array
         if hasattr(cluster_labels, 'values'):
@@ -303,7 +328,7 @@ class TokenClusteringPipeline:
         cluster_map = cluster_labels.reshape(h, w)
         
         n_final_clusters = len(np.unique(cluster_map))
-        logging.info(f"Clustering complete: {n_final_clusters} clusters found using {method}")
+        logging.info(f"DBSCAN clustering complete: {n_final_clusters} clusters found")
         
         return cluster_map
     
@@ -355,12 +380,13 @@ class TokenClusteringPipeline:
         return smoothed
     
     def process_tile(self, image_path: str, output_dir: str, 
-                    n_clusters: int = 3, clustering_method: str = "kmeans",
-                    apply_smoothing: bool = True, use_umap: bool = False,
-                    use_gpu: bool = False, umap_n_components: int = 50,
-                    umap_n_neighbors: int = 15, umap_min_dist: float = 0.1) -> Dict:
+                    eps: Optional[float] = None, min_samples: int = 5,
+                    use_umap: bool = True, use_gpu: bool = False,
+                    umap_n_components: int = 50, umap_n_neighbors: int = 15,
+                    umap_min_dist: float = 0.1, normalize_embeddings: bool = True,
+                    apply_smoothing: bool = True) -> Dict:
         """
-        Process a single tile: extract tokens, cluster, and save results.
+        Process a single tile: extract tokens, cluster with DBSCAN+UMAP, and save results.
         """
         tile_name = os.path.splitext(os.path.basename(image_path))[0]
         
@@ -374,18 +400,15 @@ class TokenClusteringPipeline:
         # Convert to spatial map
         spatial_features, tokens_h, tokens_w = self.tokens_to_spatial_map(token_features)
         
-        # Get optimal clustering parameters
-        optimal_params = self.get_optimal_clustering_params(spatial_features)
-        n_clusters = optimal_params["clustering"].get("n_clusters", n_clusters)
-        umap_params = optimal_params["umap"]
-        
-        # Cluster tokens
-        cluster_map = self.cluster_tokens(
-            spatial_features, n_clusters, clustering_method, 
-            use_umap=use_umap, use_gpu=use_gpu, 
-            umap_n_components=umap_params["n_components"],
-            umap_n_neighbors=umap_params["n_neighbors"], 
-            umap_min_dist=umap_params["min_dist"]
+        # Cluster tokens using DBSCAN + UMAP
+        cluster_map = self.cluster_tokens_dbscan(
+            spatial_features, eps=eps, min_samples=min_samples,
+            use_umap=use_umap, use_gpu=use_gpu,
+            umap_n_components=umap_n_components,
+            umap_n_neighbors=umap_n_neighbors,
+            umap_min_dist=umap_min_dist,
+            normalize_embeddings=normalize_embeddings,
+            output_dir=output_dir
         )
         
         # Apply smoothing
@@ -418,7 +441,11 @@ class TokenClusteringPipeline:
         cluster_path = os.path.join(output_dir, cluster_filename)
         
         # Convert to uint8 for saving (scale to 0-255)
-        cluster_img = (cluster_map_full * (255 // np.max(cluster_map_full))).astype(np.uint8)
+        max_cluster = np.max(cluster_map_full)
+        if max_cluster > 0:
+            cluster_img = (cluster_map_full * (255 // max_cluster)).astype(np.uint8)
+        else:
+            cluster_img = cluster_map_full.astype(np.uint8)
         Image.fromarray(cluster_img).save(cluster_path)
         
         # Save cluster assignments as JSON
@@ -426,7 +453,7 @@ class TokenClusteringPipeline:
             "tile_name": tile_name,
             "n_clusters": int(np.max(cluster_map_full) + 1),
             "token_grid_size": [tokens_h, tokens_w],
-            "clustering_method": clustering_method,
+            "clustering_method": "dbscan",
             "smoothing_applied": apply_smoothing,
             "cluster_stats": {}
         }
@@ -452,6 +479,36 @@ class TokenClusteringPipeline:
         
         return cluster_info
     
+    def process_slide(self, tile_paths: List[str], slide_name: str, output_dir: str,
+                     **kwargs) -> Dict:
+        """
+        Process all tiles in a slide using DBSCAN + UMAP clustering.
+        """
+        logging.info(f"Processing slide {slide_name} with {len(tile_paths)} tiles using DBSCAN + UMAP")
+        
+        all_results = []
+        for tile_path in tile_paths:
+            try:
+                result = self.process_tile(tile_path, output_dir, **kwargs)
+                all_results.append(result)
+            except Exception as e:
+                logging.error(f"Error processing tile {tile_path}: {e}")
+                continue
+        
+        # Save slide summary
+        slide_summary = {
+            "slide_name": slide_name,
+            "total_tiles_processed": len(all_results),
+            "clustering_method": "dbscan_umap",
+            "tile_results": all_results
+        }
+        
+        summary_path = os.path.join(output_dir, f"{slide_name}_clustering_summary.json")
+        with open(summary_path, "w") as f:
+            json.dump(slide_summary, f, indent=2)
+        
+        return {"cluster_assignments": all_results, "summary": slide_summary}
+    
     def create_cluster_visualization(self, image: np.ndarray, cluster_map: np.ndarray, save_path: str):
         """Create and save cluster visualization."""
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -463,13 +520,17 @@ class TokenClusteringPipeline:
         
         # Cluster map
         im = axes[1].imshow(cluster_map, cmap='tab10')
-        axes[1].set_title("Token Clusters")
+        axes[1].set_title("DBSCAN Token Clusters")
         axes[1].axis('off')
         plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
         
         # Overlay
         overlay = image.copy().astype(float) / 255.0
-        cluster_colored = plt.cm.tab10(cluster_map / np.max(cluster_map))[:, :, :3]
+        max_cluster = np.max(cluster_map)
+        if max_cluster > 0:
+            cluster_colored = plt.cm.tab10(cluster_map / max_cluster)[:, :, :3]
+        else:
+            cluster_colored = np.zeros_like(overlay)
         blended = 0.6 * overlay + 0.4 * cluster_colored
         axes[2].imshow(blended)
         axes[2].set_title("Overlay")
@@ -479,32 +540,29 @@ class TokenClusteringPipeline:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
 
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-    parser = argparse.ArgumentParser(description="Token clustering for histology tiles")
+    
+    parser = argparse.ArgumentParser(description="Token clustering for histology tiles using DBSCAN + UMAP")
     parser.add_argument("--input_path", type=str, required=True,
                        help="Path to tiled images (256x256 preferred).")
     parser.add_argument("--output_path", type=str, required=True,
                        help="Path for clustering output.")
     parser.add_argument("--model_name", type=str, default="facebook/dinov2-large",
                        help="Model name for feature extraction.")
-    parser.add_argument("--n_clusters", type=int, default=3,
-                       help="Number of clusters (for k-means).")
-    parser.add_argument("--clustering_method", type=str, default="kmeans",
-                       choices=["kmeans", "hdbscan"],
-                       help="Clustering method.")
-    parser.add_argument("--no_smoothing", action="store_true",
-                       help="Disable CRF/majority smoothing.")
-    parser.add_argument("--device", type=str, default="cuda",
-                       help="Device to use (cuda/cpu).")
     
-    # GPU and UMAP arguments
-    parser.add_argument("--use_gpu", action="store_true",
-                       help="Use GPU acceleration for clustering (requires cuML).")
+    # DBSCAN parameters
+    parser.add_argument("--eps", type=float, default=None,
+                       help="DBSCAN eps. If None, estimates automatically.")
+    parser.add_argument("--min_samples", type=int, default=5,
+                       help="DBSCAN min_samples parameter.")
+    
+    # UMAP parameters
     parser.add_argument("--use_umap", action="store_true",
                        help="Apply UMAP dimensionality reduction before clustering.")
     parser.add_argument("--umap_n_components", type=int, default=50,
@@ -514,22 +572,33 @@ def main():
     parser.add_argument("--umap_min_dist", type=float, default=0.1,
                        help="UMAP min_dist parameter.")
     
+    # Other parameters
+    parser.add_argument("--normalize_embeddings", action="store_true",
+                       help="L2 normalize embeddings before clustering.")
+    parser.add_argument("--use_gpu", action="store_true",
+                       help="Use GPU acceleration for clustering (requires cuML).")
+    parser.add_argument("--no_smoothing", action="store_true",
+                       help="Disable CRF/majority smoothing.")
+    parser.add_argument("--device", type=str, default="cuda",
+                       help="Device to use (cuda/cpu).")
+    
     args = parser.parse_args()
     
     if not HAS_TRANSFORMERS:
         logging.error("transformers is required but not installed.")
         return
     
-    logging.info("Starting token clustering with arguments: %s", args)
+    logging.info("Starting DBSCAN + UMAP token clustering with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
     
     # Initialize pipeline
     try:
         pipeline = TokenClusteringPipeline(
             model_name=args.model_name,
+            clustering_method="dbscan",
             device=args.device
         )
-        logging.info(f"Initialized token clustering pipeline with {args.model_name}")
+        logging.info(f"Initialized DBSCAN token clustering pipeline with {args.model_name}")
     except Exception as e:
         logging.error(f"Failed to initialize pipeline: {e}")
         return
@@ -548,18 +617,20 @@ def main():
         relative_path = os.path.relpath(tile_file, args.input_path)
         tile_out_dir = os.path.join(args.output_path, os.path.dirname(relative_path))
         os.makedirs(tile_out_dir, exist_ok=True)
+        
         try:
             result = pipeline.process_tile(
                 tile_file, 
                 tile_out_dir,
-                n_clusters=args.n_clusters,
-                clustering_method=args.clustering_method,
-                apply_smoothing=not args.no_smoothing,
+                eps=args.eps,
+                min_samples=args.min_samples,
                 use_umap=args.use_umap,
                 use_gpu=args.use_gpu,
                 umap_n_components=args.umap_n_components,
                 umap_n_neighbors=args.umap_n_neighbors,
-                umap_min_dist=args.umap_min_dist
+                umap_min_dist=args.umap_min_dist,
+                normalize_embeddings=args.normalize_embeddings,
+                apply_smoothing=not args.no_smoothing
             )
             all_results.append(result)
         except Exception as e:
@@ -572,12 +643,12 @@ def main():
         json.dump({
             "total_tiles_processed": len(all_results),
             "model_used": args.model_name,
-            "clustering_method": args.clustering_method,
-            "n_clusters": args.n_clusters,
+            "clustering_method": "dbscan_umap",
             "results": all_results
         }, f, indent=2)
     
-    logging.info(f"Token clustering completed. Processed {len(all_results)} tiles. Output saved to: %s", args.output_path)
+    logging.info(f"DBSCAN + UMAP token clustering completed. Processed {len(all_results)} tiles. Output saved to: %s", args.output_path)
+
 
 if __name__ == "__main__":
     main()
