@@ -7,18 +7,27 @@ from PIL import Image
 from cellpose import models
 import logging
 
-def segment_and_extract_bboxes(img_path, model, out_dir, channels):
+def segment_and_extract_bboxes(img_path, model, out_dir, channels, flow_threshold=0.4, cellprob_threshold=0.0):
     """
     Runs Cellpose segmentation on a single tile.
     Saves the resulting mask as a PNG.
     Extracts bounding boxes directly from the mask for each label.
+    
+    Args:
+        flow_threshold: Confidence threshold for pixel assignments (default 0.4, higher = more confident)
+        cellprob_threshold: Probability threshold for cell vs background (default 0.0, higher = more confident)
     """
     tile_name = os.path.splitext(os.path.basename(img_path))[0]
     img = np.array(Image.open(img_path))
-    logging.info(f"Segmenting tile: {img_path}")
+    logging.info(f"Segmenting tile: {img_path} with flow_threshold={flow_threshold}, cellprob_threshold={cellprob_threshold}")
 
-    # 1) Run segmentation
-    masks, flows, styles, diams = model.eval(img, channels=channels)
+    # 1) Run segmentation with confidence thresholds
+    masks, flows, styles, diams = model.eval(
+        img, 
+        channels=channels,
+        flow_threshold=flow_threshold,
+        cellprob_threshold=cellprob_threshold
+    )
 
     # 2) Save the mask to disk
     mask_img = Image.fromarray(masks.astype(np.uint16))
@@ -64,6 +73,10 @@ def main():
     parser.add_argument("--model_type", type=str, default="cyto2", help="Cellpose model type.")
     parser.add_argument("--chan", type=int, default=0, help="Channel for cellpose.")
     parser.add_argument("--chan2", type=int, default=0, help="Second channel for cellpose.")
+    parser.add_argument("--flow_threshold", type=float, default=0.4, 
+                       help="Flow threshold for segmentation confidence (higher = more confident, default 0.4).")
+    parser.add_argument("--cellprob_threshold", type=float, default=0.0,
+                       help="Cell probability threshold (higher = more confident, default 0.0).")
     args = parser.parse_args()
 
     logging.info("Starting segmentation with arguments: %s", args)
@@ -84,7 +97,14 @@ def main():
         relative_path = os.path.relpath(tile_file, args.input_path)
         tile_out_dir = os.path.join(args.output_path, os.path.dirname(relative_path))
         os.makedirs(tile_out_dir, exist_ok=True)
-        segment_and_extract_bboxes(tile_file, model, tile_out_dir, channels)
+        segment_and_extract_bboxes(
+            tile_file, 
+            model, 
+            tile_out_dir, 
+            channels, 
+            args.flow_threshold, 
+            args.cellprob_threshold
+        )
 
     logging.info("Segmentation step done. Output saved to: %s", args.output_path)
 

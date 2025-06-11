@@ -28,6 +28,38 @@ RESOURCE_GROUP = "AIMLCC-DEV-RG" # Replace if needed
 WORKSPACE_NAME = "edu06_histology_img_segmentation" # Replace if needed
 COMPUTE_CLUSTER = "edu06-gpu-compute-cluster" # Replace if needed
 
+def format_param_for_name(value):
+    """Convert parameter values to name-friendly format, replacing decimal points with 'pt'."""
+    if value is None:
+        return "auto"
+    if isinstance(value, float):
+        # Convert float to string and replace decimal point with 'pt'
+        return str(value).replace(".", "pt")
+    if isinstance(value, bool):
+        return "T" if value else "F"
+    return str(value)
+
+def build_param_string(args):
+    """Build a parameter string for job names and output paths."""
+    param_parts = []
+    
+    # Segmentation parameters (shortened names)
+    param_parts.append(f"prob_{format_param_for_name(args.segment_cellprob_threshold)}")
+    param_parts.append(f"flow_{format_param_for_name(args.segment_flow_threshold)}")
+    
+    # Key clustering parameters
+    param_parts.append(f"eps_{format_param_for_name(args.cluster_eps)}")
+    param_parts.append(f"mins_{args.cluster_min_samples}")
+    
+    if args.cluster_normalize:
+        param_parts.append("norm")
+    if args.cluster_use_gpu:
+        param_parts.append("gpu")
+    if args.cluster_use_umap:
+        param_parts.append(f"umap_{args.cluster_umap_components}")
+    
+    return "_".join(param_parts)
+
 # Define a helper function to build the cluster command dynamically
 def build_cluster_command(
     cluster_eps: float | None,
@@ -83,6 +115,10 @@ def build_components(env,
                      classify_output_uri: str,
                      postprocess_output_uri: str,
                      classify_per_cluster: int,
+                     param_string: str,
+                     # --- Add Segmentation Parameters ---
+                     segment_flow_threshold: float,
+                     segment_cellprob_threshold: float,
                      # --- Add Clustering Parameters ---
                      cluster_eps: float | None,
                      cluster_min_samples: int,
@@ -121,9 +157,7 @@ def build_components(env,
             "--overlap 0"
         ),
         environment=env,
-    )
-
-    # 2) Segment
+    )    # 2) Segment
     segment_component = command(
         name="Segmentation",
         display_name="Cell Segmentation",
@@ -142,7 +176,9 @@ def build_components(env,
             "--input_path ${{inputs.prepped_tiles_path}} "
             "--output_path ${{outputs.output_path}} "
             "--model_type cyto2 "
-            "--chan 2 --chan2 1"
+            "--chan 2 --chan2 1 "
+            f"--flow_threshold {segment_flow_threshold} "
+            f"--cellprob_threshold {segment_cellprob_threshold}"
         ),
         environment=env,
     )
@@ -221,12 +257,12 @@ def build_components(env,
                 path=postprocess_output_uri
             )
         },
-        code="./",
-        command=(
+        code="./",        command=(
             "python post_process.py "
             "--segmentation_path ${{inputs.segmentation_path}} "
             "--classification_path ${{inputs.classification_path}} "
-            "--output_path ${{outputs.output_path}}"
+            "--output_path ${{outputs.output_path}} "
+            f"--param_string {param_string}"
         ),
         environment=env,
     )
@@ -256,12 +292,14 @@ def run_pipeline():
     parser.add_argument("--raw_slides_uri", type=str, default="azureml://datastores/workspaceblobstore/paths/UI/2025-03-05_125751_UTC/", help="URI folder of raw slides (for modes: full, prep_only).")
     parser.add_argument("--prepped_data_uri", type=str, default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/", help="URI folder of prepped tiles (for modes: seg_cluster_cls, cluster_cls, classify_only).")
     parser.add_argument("--segmented_data_uri", type=str, default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/", help="URI folder of segmented tiles (for modes: cluster_cls, classify_only).")
-    parser.add_argument("--clustered_data_uri", type=str, default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/", help="URI folder of clustered results (for modes: classify_only).")
-
-    # --- Classification Parameters ---
+    parser.add_argument("--clustered_data_uri", type=str, default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/", help="URI folder of clustered results (for modes: classify_only).")    # --- Classification Parameters ---
     parser.add_argument("--classify_per_cluster", type=int, default=10, help="Number of bounding boxes per cluster to classify.")
 
-    # --- Clustering Parameters ---
+    # --- Segmentation Parameters ---
+    parser.add_argument("--segment_flow_threshold", type=float, default=0.4, help="Flow threshold for segmentation confidence (higher = more confident, default 0.4).")
+    parser.add_argument("--segment_cellprob_threshold", type=float, default=0.0, help="Cell probability threshold (higher = more confident, default 0.0).")
+
+    # --- Clustering Parameters ---  
     parser.add_argument("--cluster_eps", type=float, default=None, help="DBSCAN eps parameter. If None, cluster.py attempts auto-estimation.")
     parser.add_argument("--cluster_min_samples", type=int, default=5, help="DBSCAN min_samples parameter.")
     parser.add_argument("--cluster_use_gpu", action="store_true", help="Enable GPU usage within the clustering component (embedding and cuML DBSCAN if available).")
@@ -275,6 +313,11 @@ def run_pipeline():
     args = parser.parse_args()
     logging.info("Parsed arguments: %s", args)
 
+    # --- Log segmentation parameters specifically ---
+    logging.info("Segmentation parameters for this run:")
+    logging.info(f"  --segment_flow_threshold: {args.segment_flow_threshold}")
+    logging.info(f"  --segment_cellprob_threshold: {args.segment_cellprob_threshold}")
+
     # --- Log clustering parameters specifically ---
     logging.info("Clustering parameters for this run:")
     logging.info(f"  --cluster_eps: {'Auto' if args.cluster_eps is None else args.cluster_eps}")
@@ -287,14 +330,14 @@ def run_pipeline():
         logging.info(f"  --cluster_umap_neighbors: {args.cluster_umap_neighbors}")
         logging.info(f"  --cluster_umap_min_dist: {args.cluster_umap_min_dist}")
         logging.info(f"  --cluster_umap_metric: {args.cluster_umap_metric}")
-
-
     # --------------------------------------------------
-    # 2. Generate a timestamp prefix for unique outputs
+    # 2. Generate a timestamp prefix and parameter string for unique outputs
     # --------------------------------------------------
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    param_string = build_param_string(args)
     logging.info("Timestamp for outputs: %s", timestamp)
-    output_base_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_pipeline_outputs" # Define base path
+    logging.info("Parameter string for outputs: %s", param_string)
+    output_base_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v1_{param_string}" # Define base path with params
 
     # Build unique paths for each step
     data_prep_output_uri = f"{output_base_uri}/data_prep/"
@@ -340,8 +383,7 @@ def run_pipeline():
     # --------------------------------------------------
     # 5. Build the command components - PASS CLUSTER ARGS HERE
     # --------------------------------------------------
-    try:
-        components = build_components(
+    try:        components = build_components(
             env=env,
             data_prep_output_uri=data_prep_output_uri,
             segment_output_uri=segment_output_uri,
@@ -349,6 +391,10 @@ def run_pipeline():
             classify_output_uri=classify_output_uri,
             postprocess_output_uri=postprocess_output_uri,
             classify_per_cluster=args.classify_per_cluster,
+            param_string=param_string,
+            # --- Pass segmentation args from CLI ---
+            segment_flow_threshold=args.segment_flow_threshold,
+            segment_cellprob_threshold=args.segment_cellprob_threshold,
             # --- Pass clustering args from CLI ---
             cluster_eps=args.cluster_eps,
             cluster_min_samples=args.cluster_min_samples,
@@ -440,10 +486,9 @@ def run_pipeline():
 
     # --------------------------------------------------
     # 7. Build & submit the chosen pipeline
-    # --------------------------------------------------
-    logging.info("Selected pipeline mode: %s", args.mode)
+    # --------------------------------------------------    logging.info("Selected pipeline mode: %s", args.mode)
     pipeline_job = None
-    experiment_name = f"histology_{args.mode}_{timestamp}" # Unique experiment name
+    experiment_name = f"v1_{args.mode}_{param_string}_{timestamp}" # Include parameter string in experiment name
 
     try:
         if args.mode == "prep_only":

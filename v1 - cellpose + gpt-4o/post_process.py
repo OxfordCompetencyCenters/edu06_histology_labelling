@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--segmentation_path", type=str, help="Path to segmentation masks.")
     parser.add_argument("--classification_path", type=str, help="Path to classification results.")
     parser.add_argument("--output_path", type=str, help="Final output location.")
+    parser.add_argument("--param_string", type=str, default="", help="Parameter string for output filename.")
     args = parser.parse_args()
 
     logging.info("Starting post-processing with arguments: %s", args)
@@ -98,7 +99,13 @@ def main():
             "cells": cell_records
         })
 
-    final_json = os.path.join(args.output_path, "final_annotations.json")
+    # Generate filename with parameter string
+    if args.param_string:
+        filename = f"v1_{args.param_string}_annotations.json"
+    else:
+        filename = "final_annotations.json"
+    
+    final_json = os.path.join(args.output_path, filename)
     with open(final_json, "w") as f:
         json.dump(final_annotations, f, indent=2)
     
