@@ -257,7 +257,8 @@ def build_components(env,
                 path=postprocess_output_uri
             )
         },
-        code="./",        command=(
+        code="./",
+        command=(
             "python post_process.py "
             "--segmentation_path ${{inputs.segmentation_path}} "
             "--classification_path ${{inputs.classification_path}} "
