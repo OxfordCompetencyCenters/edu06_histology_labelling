@@ -77,13 +77,16 @@ def main():
                        help="Flow threshold for segmentation confidence (higher = more confident, default 0.4).")
     parser.add_argument("--cellprob_threshold", type=float, default=0.0,
                        help="Cell probability threshold (higher = more confident, default 0.0).")
+    parser.add_argument("--segment_use_gpu", action="store_true", default=False,
+                       help="Use GPU for segmentation (default: False, uses CPU).")
     args = parser.parse_args()
 
     logging.info("Starting segmentation with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
 
     logging.info(f"Initializing Cellpose model of type: {args.model_type}")
-    model = models.Cellpose(model_type=args.model_type, gpu=True)
+    model = models.Cellpose(model_type=args.model_type, gpu=args.segment_use_gpu)
+    logging.info(f"Using GPU: {args.segment_use_gpu}")
 
     channels = [args.chan, args.chan2]
     logging.info(f"Using channels: {channels}")

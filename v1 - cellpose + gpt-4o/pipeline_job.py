@@ -42,10 +42,11 @@ def format_param_for_name(value):
 def build_param_string(args):
     """Build a parameter string for job names and output paths."""
     param_parts = []
-    
-    # Segmentation parameters (shortened names)
+      # Segmentation parameters (shortened names)
     param_parts.append(f"prob_{format_param_for_name(args.segment_cellprob_threshold)}")
     param_parts.append(f"flow_{format_param_for_name(args.segment_flow_threshold)}")
+    if args.segment_use_gpu:
+        param_parts.append("seg_gpu")
     
     # Key clustering parameters
     param_parts.append(f"eps_{format_param_for_name(args.cluster_eps)}")
@@ -115,10 +116,10 @@ def build_components(env,
                      classify_output_uri: str,
                      postprocess_output_uri: str,
                      classify_per_cluster: int,
-                     param_string: str,
-                     # --- Add Segmentation Parameters ---
+                     param_string: str,                     # --- Add Segmentation Parameters ---
                      segment_flow_threshold: float,
                      segment_cellprob_threshold: float,
+                     segment_use_gpu: bool,
                      # --- Add Clustering Parameters ---
                      cluster_eps: float | None,
                      cluster_min_samples: int,
@@ -179,6 +180,7 @@ def build_components(env,
             "--chan 2 --chan2 1 "
             f"--flow_threshold {segment_flow_threshold} "
             f"--cellprob_threshold {segment_cellprob_threshold}"
+            f"{' --segment_use_gpu' if segment_use_gpu else ''}"
         ),
         environment=env,
     )
@@ -299,6 +301,7 @@ def run_pipeline():
     # --- Segmentation Parameters ---
     parser.add_argument("--segment_flow_threshold", type=float, default=0.4, help="Flow threshold for segmentation confidence (higher = more confident, default 0.4).")
     parser.add_argument("--segment_cellprob_threshold", type=float, default=0.0, help="Cell probability threshold (higher = more confident, default 0.0).")
+    parser.add_argument("--segment_use_gpu", action="store_true", help="Enable GPU usage for cellpose segmentation (default: False, uses CPU).")
 
     # --- Clustering Parameters ---  
     parser.add_argument("--cluster_eps", type=float, default=None, help="DBSCAN eps parameter. If None, cluster.py attempts auto-estimation.")
@@ -314,10 +317,10 @@ def run_pipeline():
     args = parser.parse_args()
     logging.info("Parsed arguments: %s", args)
 
-    # --- Log segmentation parameters specifically ---
-    logging.info("Segmentation parameters for this run:")
+    # --- Log segmentation parameters specifically ---    logging.info("Segmentation parameters for this run:")
     logging.info(f"  --segment_flow_threshold: {args.segment_flow_threshold}")
     logging.info(f"  --segment_cellprob_threshold: {args.segment_cellprob_threshold}")
+    logging.info(f"  --segment_use_gpu: {args.segment_use_gpu}")
 
     # --- Log clustering parameters specifically ---
     logging.info("Clustering parameters for this run:")
@@ -392,10 +395,10 @@ def run_pipeline():
             classify_output_uri=classify_output_uri,
             postprocess_output_uri=postprocess_output_uri,
             classify_per_cluster=args.classify_per_cluster,
-            param_string=param_string,
-            # --- Pass segmentation args from CLI ---
+            param_string=param_string,            # --- Pass segmentation args from CLI ---
             segment_flow_threshold=args.segment_flow_threshold,
             segment_cellprob_threshold=args.segment_cellprob_threshold,
+            segment_use_gpu=args.segment_use_gpu,
             # --- Pass clustering args from CLI ---
             cluster_eps=args.cluster_eps,
             cluster_min_samples=args.cluster_min_samples,
