@@ -25,9 +25,8 @@ RESOURCE_GROUP = "AIMLCC-DEV-RG"
 WORKSPACE_NAME = "edu06_histology_img_segmentation"
 COMPUTE_CLUSTER = "edu06-gpu-compute-cluster"
 
-def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, enable_multi_resolution: bool) -> str:
-    """Build sam_med data preparation command with multi-resolution support."""
-    cmd_parts = [
+def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, enable_multi_resolution: bool, num_tiles: int = None) -> str:
+    """Build sam_med data preparation command with multi-resolution support."""    cmd_parts = [
         "python data_prep.py",
         "--input_data ${{inputs.input_data}}",
         "--output_path ${{outputs.output_path}}",
@@ -40,6 +39,8 @@ def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, en
     
     if enable_multi_resolution:
         cmd_parts.append("--enable_multi_resolution")
+      if num_tiles is not None:
+        cmd_parts.append(f"--num_tiles {num_tiles}")
     
     return " ".join(cmd_parts)
 
@@ -106,6 +107,7 @@ def build_components(
     target_mpp: float,
     enable_multi_resolution: bool,
     device: str,
+    num_random_tiles: int,
     # Token Clustering Parameters
     token_model: str,
     clustering_method: str,
@@ -121,12 +123,11 @@ def build_components(
     """Create command components for the pipeline steps."""
     
     logging.info("Building pipeline components...")
-    
-    # 1. sam_med Data Preparation
-    data_prep_cmd = build_sam_med_data_prep_command(
+      # 1. sam_med Data Preparation    data_prep_cmd = build_sam_med_data_prep_command(
         tile_sizes=tile_sizes,
         target_mpp=target_mpp,
-        enable_multi_resolution=enable_multi_resolution
+        enable_multi_resolution=enable_multi_resolution,
+        num_tiles=num_random_tiles
     )
     
     data_prep_component = command(
@@ -261,14 +262,15 @@ def run_pipeline():
     # Classification Parameters
     parser.add_argument("--classify_per_cluster", type=int, default=10, 
                        help="Number of bounding boxes per cluster to classify.")
-    
-    # sam_med Data Preparation Parameters
+      # sam_med Data Preparation Parameters
     parser.add_argument("--tile_sizes", type=int, nargs="+", default=[256, 512], 
                        help="Tile sizes for multi-resolution processing")
     parser.add_argument("--target_mpp", type=float, default=0.25, 
                        help="Target microns per pixel for normalization")
     parser.add_argument("--enable_multi_resolution", action="store_true", 
                        help="Enable multi-resolution tiling")
+    parser.add_argument("--num_random_tiles", type=int, default=None,
+                       help="If provided, generate this many random tiles per level instead of tiling the whole slide")
     parser.add_argument("--device", type=str, default="cuda", 
                        help="Device to use (cuda/cpu)")
 
@@ -352,13 +354,13 @@ def run_pipeline():
             cluster_output_uri=cluster_output_uri,
             classify_output_uri=classify_output_uri,
             postprocess_output_uri=postprocess_output_uri,
-            classify_per_cluster=args.classify_per_cluster,
-            # sam_med pipeline parameters
+            classify_per_cluster=args.classify_per_cluster,            # sam_med pipeline parameters
             sam_checkpoint=args.sam_checkpoint,
             tile_sizes=args.tile_sizes,
             target_mpp=args.target_mpp,
             enable_multi_resolution=args.enable_multi_resolution,
             device=args.device,
+            num_random_tiles=args.num_random_tiles,
             token_model=args.token_model,
             clustering_method=args.clustering_method,
             n_clusters=args.n_clusters,

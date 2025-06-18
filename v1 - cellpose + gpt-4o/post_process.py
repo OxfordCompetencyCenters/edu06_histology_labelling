@@ -1,115 +1,150 @@
-import argparse
-import os
-import glob
-import json
-import logging
+#!/usr/bin/env python3
+"""
+Post-processing: merge segmentation masks + GPT classifications
+into a single JSON annotation file.
+
+Updated 2025-06-18 – supports new mag-encoded tile filenames.
+"""
+
+from __future__ import annotations
+import argparse, glob, json, logging, os, re
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from skimage import measure
 
-def mask_to_polygon_list(mask):
-    """
-    Converts a labeled mask (numpy array) into a list of polygons.
-    Return format: 
-    [
-      {
-        'label_id': 1,
-        'polygon': [(x1, y1), (x2, y2), ...]
-      },
-      ...
-    ]
-    """
+# ─────────────────────────── helpers ─────────────────────────── #
+
+_TILE_REGEX = re.compile(
+    r"""                # e.g.  Slide42_mag0p900_x2048_y1024.png
+    _mag(?P<mag>[0-9]+p[0-9]+)
+    _x(?P<x>\d+)
+    _y(?P<y>\d+)
+    \.png$""",
+    re.VERBOSE,
+)
+
+def mask_to_polygon_list(mask: np.ndarray):
+    """Convert a labelled mask to a list of polygons (one per label ID)."""
     polygons = []
-    unique_labels = np.unique(mask)
-    for lbl in unique_labels:
+    for lbl in np.unique(mask):
         if lbl == 0:
             continue
-        binary_mask = (mask == lbl).astype(np.uint8)
-        contours = measure.find_contours(binary_mask, 0.5)
-        if len(contours) > 0:
-            main_contour = max(contours, key=lambda x: x.shape[0])
-            poly = [(float(pt[1]), float(pt[0])) for pt in main_contour]
-            polygons.append({"label_id": int(lbl), "polygon": poly})
+        binary = (mask == lbl).astype(np.uint8)
+        contours = measure.find_contours(binary, 0.5)
+        if not contours:
+            continue
+        # choose longest contour
+        contour = max(contours, key=lambda c: c.shape[0])
+        # swap (row, col)→(x, y) and cast to float for JSON serialisation
+        poly = [(float(pt[1]), float(pt[0])) for pt in contour]
+        polygons.append({"label_id": int(lbl), "polygon": poly})
     return polygons
+
+def find_classification_file(cls_root: Path) -> Path | None:
+    """Locate classification_results.json (top-level or one directory deep)."""
+    direct = cls_root / "classification_results.json"
+    if direct.exists():
+        return direct
+    candidates = list(cls_root.glob("*/classification_results.json"))
+    if candidates:
+        return candidates[0]
+    return None
+
+def parse_tile_meta(tile_name: str) -> dict[str, float | int] | None:
+    """
+    Given 'Slide_mag1p000_x2048_y1024.png' return:
+    {'magnification': 1.0, 'x': 2048, 'y': 1024}
+    """
+    m = _TILE_REGEX.search(tile_name)
+    if not m:
+        return None
+    mag = float(m.group("mag").replace("p", ".", 1))
+    return {
+        "magnification": mag,
+        "x": int(m.group("x")),
+        "y": int(m.group("y")),
+    }
+
+# ───────────────────────────── main ───────────────────────────── #
 
 def main():
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--segmentation_path", required=True)
+    ap.add_argument("--classification_path", required=True)
+    ap.add_argument("--output_path", required=True)
+    ap.add_argument("--param_string", default="")
+    args = ap.parse_args()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--segmentation_path", type=str, help="Path to segmentation masks.")
-    parser.add_argument("--classification_path", type=str, help="Path to classification results.")
-    parser.add_argument("--output_path", type=str, help="Final output location.")
-    parser.add_argument("--param_string", type=str, default="", help="Parameter string for output filename.")
-    args = parser.parse_args()
+    seg_root = Path(args.segmentation_path)
+    cls_root = Path(args.classification_path)
+    out_root = Path(args.output_path)
+    out_root.mkdir(parents=True, exist_ok=True)
 
-    logging.info("Starting post-processing with arguments: %s", args)
-    os.makedirs(args.output_path, exist_ok=True)
-
-    class_results_file = os.path.join(args.classification_path, "classification_results.json")
-    if not os.path.exists(class_results_file):
-        logging.warning("No classification_results.json found in input path: %s", args.classification_path)
+    cls_file = find_classification_file(cls_root)
+    if cls_file is None:
+        logging.error("classification_results.json not found under %s", cls_root)
         return
-    
-    with open(class_results_file, "r") as f:
-        classification_results = json.load(f)
 
-    final_annotations = []
+    logging.info("Loading classifications from %s", cls_file)
+    classification_results = json.loads(cls_file.read_text())
 
-    for tile_result in classification_results:
-        tile_path = tile_result["tile_path"]
-        parent_dir = tile_result["slide_name"]
-        tile_name = tile_result["tile_name"]
-        mask_name = tile_name + "_mask.png"
-        mask_path = os.path.join(args.segmentation_path, parent_dir, mask_name)
-        if not os.path.exists(mask_path):
-            logging.warning(f"Mask {mask_path} not found for tile: {tile_path}")
+    final_ann = []
+
+    for tile in classification_results:
+        tile_path = tile["tile_path"]
+        tile_name = tile["tile_name"]
+        slide_name = tile["slide_name"]
+
+        meta = parse_tile_meta(tile_name)
+        if meta is None:
+            logging.warning("Could not parse magnification from %s – skipping.", tile_name)
             continue
 
-        mask_img = Image.open(mask_path)
-        mask_arr = np.array(mask_img)
-        polygons = mask_to_polygon_list(mask_arr)
+        mask_name = tile_name + "_mask.png"
+        mask_path = seg_root / slide_name / mask_name
+        if not mask_path.exists():
+            logging.warning("Mask not found: %s", mask_path)
+            continue
+
+        mask = np.array(Image.open(mask_path))
+        polys = mask_to_polygon_list(mask)
 
         cell_records = []
-        for poly_info in polygons:
-            lbl_id = poly_info["label_id"]
-            classified_cell = next(
-                (c for c in tile_result["classified_cells"] if c["label_id"] == lbl_id),
-                None
-            )
-            if classified_cell is None:
-                logging.info("No classification found for label_id=%d in tile=%s", lbl_id, tile_path)
+        for poly in polys:
+            lbl_id = poly["label_id"]
+            cls_cell = next((c for c in tile["classified_cells"] if c["label_id"] == lbl_id), None)
+            if cls_cell is None:
+                logging.debug("No class for lbl=%d in %s", lbl_id, tile_name)
                 continue
-            
             cell_records.append({
+                **meta,                       # magnification, x, y
                 "label_id": lbl_id,
-                "polygon": poly_info["polygon"],
-                "pred_class": classified_cell["pred_class"],
-                "cluster_id": classified_cell.get("cluster_id"),
-                "cluster_confidence": classified_cell.get("cluster_confidence"),
-                "bbox": classified_cell["bbox"]
+                "polygon": poly["polygon"],
+                "pred_class": cls_cell["pred_class"],
+                "cluster_id": cls_cell.get("cluster_id"),
+                "cluster_confidence": cls_cell.get("cluster_confidence"),
+                "bbox": cls_cell["bbox"],
             })
 
-        final_annotations.append({
+        final_ann.append({
             "tile_path": tile_path,
-            "cells": cell_records
+            **meta,
+            "cells": cell_records,
         })
 
-    # Generate filename with parameter string
-    if args.param_string:
-        filename = f"v1_{args.param_string}_annotations.json"
-    else:
-        filename = "final_annotations.json"
-    
-    final_json = os.path.join(args.output_path, filename)
-    with open(final_json, "w") as f:
-        json.dump(final_annotations, f, indent=2)
-    
-    logging.info("Post-processing step done. Output at: %s", final_json)
+    # --------------- write output --------------- #
+    out_name = f"v1_{args.param_string}_annotations.json" if args.param_string else "final_annotations.json"
+    out_file = out_root / out_name
+    out_file.write_text(json.dumps(final_ann, indent=2))
+    logging.info("Annotations written → %s", out_file)
 
+# ──────────────────────────────────────────────────────────────── #
 if __name__ == "__main__":
     main()

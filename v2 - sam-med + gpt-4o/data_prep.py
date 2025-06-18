@@ -27,10 +27,10 @@ def calculate_tissue_ratio(tile_rgb):
     tissue_ratio = np.sum(tissue_mask) / tissue_mask.size
     return tissue_ratio
 
-def tile_slide_multi_resolution(slide_path, out_dir, tile_sizes=[256, 512], overlap=0, target_mpp=0.5):
+def tile_slide_multi_resolution(slide_path, out_dir, tile_sizes=[256, 512], overlap=0, target_mpp=0.5, num_tiles=None):
     """
-    sam_med tiling function that creates tiles at multiple resolutions.
-    Generates both 256x256 tiles for token clustering and 512x512 for traditional analysis.
+    sam_med tiling function that creates tiles at the highest resolution level.
+    Generates tiles at specified sizes.
     
     Args:
         slide_path: Path to the slide file
@@ -38,6 +38,9 @@ def tile_slide_multi_resolution(slide_path, out_dir, tile_sizes=[256, 512], over
         tile_sizes: List of tile sizes to generate
         overlap: Overlap between tiles
         target_mpp: Target microns per pixel for normalization
+        num_tiles: If provided, generate this many tiles in a uniform grid pattern
+                  (from top-right to bottom-left) instead of tiling the whole slide.
+                  If this exceeds the maximum possible non-overlapping tiles, will use the maximum.
     """
     slide_name = os.path.splitext(os.path.basename(slide_path))[0]
     slide_out_dir = os.path.join(out_dir, slide_name)
@@ -63,35 +66,32 @@ def tile_slide_multi_resolution(slide_path, out_dir, tile_sizes=[256, 512], over
     # Calculate scaling factor to normalize to target MPP
     scale_factor = current_mpp / target_mpp
     
-    level_count = slide.level_count
-    downsamples = slide.level_downsamples
-    
-    # Find best level for target MPP
-    best_level = 0
-    best_level_mpp = current_mpp
-    for level in range(level_count):
-        level_mpp = current_mpp * downsamples[level]
-        if abs(level_mpp - target_mpp) < abs(best_level_mpp - target_mpp):
-            best_level = level
-            best_level_mpp = level_mpp
-    
-    logging.info(f"Using level {best_level} with MPP {best_level_mpp:.3f} (target: {target_mpp})")
+    # Using highest resolution level
+    # Calculate native MPP at highest resolution
+    mpp_at_highest_res = current_mpp
+    logging.info(f"Using highest resolution with MPP {mpp_at_highest_res:.3f} (target was {target_mpp})")
     
     # Create tiles for each specified size
     for tile_size in tile_sizes:
         create_tiles_for_size(
             slide, slide_name, slide_out_dir, 
-            tile_size, overlap, best_level, 
-            downsamples[best_level], scale_factor
+            tile_size, overlap,
+            scale_factor,
+            num_tiles
         )
     
     # Create tissue mask and metadata
-    create_tissue_mask_and_metadata(slide, slide_name, slide_out_dir, best_level)
+    create_tissue_mask_and_metadata(slide, slide_name, slide_out_dir)
     
     slide.close()
 
-def create_tiles_for_size(slide, slide_name, out_dir, tile_size, overlap, level, downsample, scale_factor):
+def create_tiles_for_size(slide, slide_name, out_dir, tile_size, overlap, scale_factor, num_tiles=None):
     """Create tiles for a specific size."""
+    # Using the highest resolution level (level 0)
+    # For highest resolution, downsample is always 1.0
+    downsample = 1.0
+    # Using highest resolution level (level 0)
+    level = 0
     size_dir = os.path.join(out_dir, f"tiles_{tile_size}x{tile_size}")
     os.makedirs(size_dir, exist_ok=True)
     
@@ -103,19 +103,114 @@ def create_tiles_for_size(slide, slide_name, out_dir, tile_size, overlap, level,
     
     steps_x = max(1, (level_w // effective_step) + (1 if level_w % effective_step != 0 else 0))
     steps_y = max(1, (level_h // effective_step) + (1 if level_h % effective_step != 0 else 0))
-    total_tiles = steps_x * steps_y
-    
-    logging.info(f"Creating {tile_size}x{tile_size} tiles: {total_tiles} total")
-    
-    tile_metadata = []
-    
-    with tqdm(total=total_tiles, desc=f"Tiling {tile_size}x{tile_size}: {slide_name}", unit="tile") as pbar:
-        x_level = 0
+    total_tiles = steps_x * steps_y        # Generate uniform tiles if requested
+    if num_tiles is not None:
+        # If num_tiles exceeds total possible non-overlapping tiles, cap it
+        max_possible_tiles = total_tiles
+        tiles_to_generate = min(num_tiles, max_possible_tiles)
+        
+        logging.info(f"Creating {tiles_to_generate} uniform {tile_size}x{tile_size} tiles")
+        
+        tile_metadata = []
         tile_idx = 0
         
-        while x_level < level_w:
-            y_level = 0
-            while y_level < level_h:
+        # Calculate grid dimensions to distribute tiles uniformly
+        from math import sqrt, ceil
+        
+        # Determine grid dimensions based on aspect ratio
+        aspect_ratio = level_w / level_h
+        grid_h = ceil(sqrt(tiles_to_generate / aspect_ratio))
+        grid_w = ceil(tiles_to_generate / grid_h)
+        
+        # Recalculate to handle rounding up
+        if grid_w * grid_h > tiles_to_generate:
+            grid_actual_tiles = min(grid_w * grid_h, max_possible_tiles)
+        else:
+            grid_actual_tiles = tiles_to_generate
+        
+        logging.info(f"Creating a {grid_w}x{grid_h} grid of tiles (max {grid_actual_tiles} tiles)")
+        
+        # Calculate spacing between tile starting positions
+        x_spacing = (level_w - tile_size) / (grid_w - 1) if grid_w > 1 else 0
+        y_spacing = (level_h - tile_size) / (grid_h - 1) if grid_h > 1 else 0
+        
+        # Generate tiles in a grid pattern - starting from top-right moving to bottom-left
+        tiles_generated = 0
+        
+        with tqdm(total=grid_actual_tiles, desc=f"Tiling {tile_size}x{tile_size}: {slide_name} (uniform)", unit="tile") as pbar:
+            for i in range(grid_w):
+                for j in range(grid_h):
+                    if tiles_generated >= grid_actual_tiles:
+                        break
+                        
+                    # Calculate starting position
+                    if grid_w > 1:
+                        # Start from right (i=0) to left (i=grid_w-1)
+                        x_level = int((level_w - tile_size) - (i * x_spacing))
+                        # Ensure x is within bounds
+                        x_level = max(0, min(level_w - tile_size, x_level))
+                        # Align to step size grid
+                        x_level = (x_level // effective_step) * effective_step
+                    else:
+                        # Center horizontally if just one column
+                        x_level = ((level_w - tile_size) // 2) // effective_step * effective_step
+                    
+                    if grid_h > 1:
+                        # Start from top (j=0) to bottom (j=grid_h-1)
+                        y_level = int(j * y_spacing)
+                        # Ensure y is within bounds
+                        y_level = max(0, min(level_h - tile_size, y_level))
+                        # Align to step size grid
+                        y_level = (y_level // effective_step) * effective_step
+                    else:
+                        # Center vertically if just one row
+                        y_level = ((level_h - tile_size) // 2) // effective_step * effective_step
+                    
+                    # Base-level coordinates (for traceability)
+                    x_base = int(x_level * downsample)
+                    y_base = int(y_level * downsample)
+                    
+                    # Read the tile from the given level
+                    tile_region = slide.read_region(
+                        (x_base, y_base),
+                        level,
+                        (tile_size, tile_size)
+                    )
+                    
+                    tile_rgb = tile_region.convert("RGB")
+                    
+                    # Check if tile contains tissue (not just background)
+                    tissue_ratio = calculate_tissue_ratio(np.array(tile_rgb))
+                    
+                    # Only save tiles with significant tissue content
+                    if tissue_ratio > 0.1:  # At least 10% tissue
+                        tile_filename = (f"{slide_name}_L{level}_{tile_size}x{tile_size}_"
+                                      f"x{x_base}_y{y_base}_idx{tile_idx:06d}.png")
+                        tile_path = os.path.join(size_dir, tile_filename)
+                        tile_rgb.save(tile_path)
+                        
+                        # Store metadata
+                        tile_metadata.append({
+                            "filename": tile_filename,
+                            "tile_idx": tile_idx,
+                            "coordinates": {
+                                "x_base": x_base,
+                                "y_base": y_base,
+                                "x_level": x_level,
+                                "y_level": y_level
+                            },
+                            "level": level,
+                            "tile_size": tile_size,
+                            "tissue_ratio": round(tissue_ratio, 3),
+                            "downsample": downsample
+                        })
+                        tile_idx += 1
+                    
+                    tiles_generated += 1
+                    pbar.update(1)
+            
+            logging.info(f"Generated {len(tile_metadata)} uniform grid tiles with sufficient tissue for level {level}")
+                
                 # Base-level coordinates
                 x_base = int(x_level * downsample)
                 y_base = int(y_level * downsample)
@@ -154,11 +249,65 @@ def create_tiles_for_size(slide, slide_name, out_dir, tile_size, overlap, level,
                         "tissue_ratio": round(tissue_ratio, 3),
                         "downsample": downsample
                     })
-                
-                y_level += effective_step
-                tile_idx += 1
-                pbar.update(1)
-            x_level += effective_step
+                    tile_idx += 1
+                    pbar.update(1)
+
+    else:
+        # Original tiling logic for the whole slide
+        logging.info(f"Creating {tile_size}x{tile_size} tiles: {total_tiles} total")
+        
+        tile_metadata = []
+        
+        with tqdm(total=total_tiles, desc=f"Tiling {tile_size}x{tile_size}: {slide_name}", unit="tile") as pbar:
+            x_level = 0
+            tile_idx = 0
+            
+            while x_level < level_w:
+                y_level = 0
+                while y_level < level_h:
+                    # Base-level coordinates
+                    x_base = int(x_level * downsample)
+                    y_base = int(y_level * downsample)
+                    
+                    # Read the tile
+                    tile_region = slide.read_region(
+                        (x_base, y_base),
+                        level,
+                        (tile_size, tile_size)
+                    )
+                    
+                    tile_rgb = tile_region.convert("RGB")
+                    
+                    # Check if tile contains tissue (not just background)
+                    tissue_ratio = calculate_tissue_ratio(np.array(tile_rgb))
+                    
+                    # Only save tiles with significant tissue content
+                    if tissue_ratio > 0.1:  # At least 10% tissue
+                        tile_filename = (f"{slide_name}_L{level}_{tile_size}x{tile_size}_"
+                                       f"x{x_base}_y{y_base}_idx{tile_idx:06d}.png")
+                        tile_path = os.path.join(size_dir, tile_filename)
+                        tile_rgb.save(tile_path)
+                        
+                        # Store metadata
+                        tile_metadata.append({
+                            "filename": tile_filename,
+                            "tile_idx": tile_idx,
+                            "coordinates": {
+                                "x_base": x_base,
+                                "y_base": y_base,
+                                "x_level": x_level,
+                                "y_level": y_level
+                            },
+                            "level": level,
+                            "tile_size": tile_size,
+                            "tissue_ratio": round(tissue_ratio, 3),
+                            "downsample": downsample
+                        })
+                    
+                    y_level += effective_step
+                    tile_idx += 1
+                    pbar.update(1)
+                x_level += effective_step
     
     # Save tile metadata
     metadata_path = os.path.join(size_dir, f"{slide_name}_tiles_{tile_size}_metadata.json")
@@ -174,7 +323,11 @@ def create_tiles_for_size(slide, slide_name, out_dir, tile_size, overlap, level,
     
     logging.info(f"Created {len(tile_metadata)} tiles of size {tile_size}x{tile_size}")
 
-def create_tissue_mask_and_metadata(slide, slide_name, out_dir, level):
+def create_tissue_mask_and_metadata(slide, slide_name, out_dir):
+    # For highest resolution, downsample is always 1.0
+    downsample = 1.0
+    # Using highest resolution level (level 0)
+    level = 0
     """Create a tissue mask and slide metadata."""
     # Create low-resolution overview for tissue detection
     overview_level = min(level + 2, slide.level_count - 1)
@@ -221,14 +374,35 @@ def create_tissue_mask_and_metadata(slide, slide_name, out_dir, level):
         json.dump(metadata, f, indent=2)
 
 # Legacy function for backward compatibility
-def tile_slide(slide_path, out_dir, tile_size=512, overlap=0):
+def tile_slide(slide_path, out_dir, tile_size=512, overlap=0, num_random_tiles=None):
     """
     Legacy function for backward compatibility.
     Calls the sam_med multi-resolution tiling with single tile size.
+    
+    Args:
+        slide_path: Path to the slide file
+        out_dir: Output directory
+        tile_size: Size of the square tile
+        overlap: Overlap between tiles
+        num_random_tiles: If provided, generate this many random tiles per level instead of tiling the whole slide
     """
-    tile_slide_multi_resolution(slide_path, out_dir, [tile_size], overlap)
+    tile_slide_multi_resolution(slide_path, out_dir, [tile_size], overlap, num_random_tiles=num_random_tiles)
 
 def main():
+    """
+    Main function to parse arguments and execute the tiling process.
+    
+    Note on performance optimization:
+    - The tiling process is primarily I/O bound rather than computation-bound,
+      meaning that GPU acceleration won't benefit the basic tiling.
+    - However, if additional image processing is needed (like tissue detection,
+      normalization, or augmentations), these could be GPU-accelerated using libraries
+      like torch, CuPy, or cuCIM (CUDA Image).
+    - For large slides, parallel processing of multiple slides simultaneously could
+      provide more benefit than GPU acceleration of a single slide.
+    - The SAM-MED2D segmentation step (in segment_sam_med.py) already uses GPU
+      acceleration when available and will benefit most from GPU resources.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -248,6 +422,8 @@ def main():
                         help="Overlap between tiles, default=0.")
     parser.add_argument("--target_mpp", type=float, default=0.5,
                         help="Target microns per pixel for normalization.")
+    parser.add_argument("--num_tiles", type=int, default=None,
+                        help="If provided, generate this many tiles in a uniform grid pattern across the slide instead of tiling the whole slide.")
     
     args = parser.parse_args()
 
@@ -282,7 +458,8 @@ def main():
                 args.output_path,
                 tile_sizes=args.tile_sizes,
                 overlap=args.overlap,
-                target_mpp=args.target_mpp
+                target_mpp=args.target_mpp,
+                num_tiles=args.num_tiles
             )
         except Exception as e:
             logging.error(f"Error processing {slide_path}: {e}")
