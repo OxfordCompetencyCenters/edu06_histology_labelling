@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Post-processing: merge segmentation masks + GPT classifications
-into a single JSON annotation file.
-
-Updated 2025-06-18 – supports new mag-encoded tile filenames.
-"""
-
 from __future__ import annotations
 import argparse, glob, json, logging, os, re
 from pathlib import Path

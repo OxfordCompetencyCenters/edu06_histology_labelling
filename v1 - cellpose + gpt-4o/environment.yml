@@ -16,6 +16,7 @@ dependencies:
   - numpy
   - pillow           # For PIL Image processing
   - scikit-image
+  - opencv-python    # For tile filtering component
   - pip
   - pip:
     - azure-ai-ml

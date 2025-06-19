@@ -51,6 +51,10 @@ def build_param_string(args):
     parts.append(f"mag_{format_param_for_name(args.magnifications)}")
     if args.num_tiles is not None:
         parts.append(f"ntiles_{args.num_tiles}")
+    # NEW → tile filtering params
+    if args.filter_tiles:
+        parts.append("filtered")
+        parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
     return "_".join(parts)
 
 def build_cluster_command(**kwargs) -> str:
@@ -88,6 +92,7 @@ def build_components(
     *,
     env: Environment,
     data_prep_output_uri: str,
+    tile_filter_output_uri: str,
     segment_output_uri: str,
     cluster_output_uri: str,
     classify_output_uri: str,
@@ -97,6 +102,14 @@ def build_components(
     # NEW data-prep params
     magnifications: str,
     num_tiles: int | None,
+    # NEW tile filtering params
+    filter_tiles: bool,
+    filter_min_edge_density: float,
+    filter_max_bright_ratio: float,
+    filter_max_dark_ratio: float,
+    filter_min_std_intensity: float,
+    filter_min_laplacian_var: float,
+    filter_min_color_variance: float,
     # segmentation params
     segment_flow_threshold: float,
     segment_cellprob_threshold: float,
@@ -112,7 +125,7 @@ def build_components(
     cluster_umap_min_dist: float,
     cluster_umap_metric: str,
 ):
-    """Create the five Azure ML command components used in the pipeline."""
+    """Create the Azure ML command components used in the pipeline."""
     logging.info("Building component objects …")
 
     # 1) Data Prep — matches new data_prep.py flags
@@ -134,7 +147,32 @@ def build_components(
         environment=env,
     )
 
-    # 2) Segmentation (unchanged)
+    # 2) NEW Tile Filter — only created if filtering is enabled
+    tile_filter_component = None
+    if filter_tiles:
+        filter_cmd = (
+            "python tile_filter.py "
+            "--input_path ${{inputs.input_path}} "
+            "--output_path ${{outputs.output_path}} "
+            f"--min_edge_density {filter_min_edge_density} "
+            f"--max_bright_ratio {filter_max_bright_ratio} "
+            f"--max_dark_ratio {filter_max_dark_ratio} "
+            f"--min_std_intensity {filter_min_std_intensity} "
+            f"--min_laplacian_var {filter_min_laplacian_var} "
+            f"--min_color_variance {filter_min_color_variance} "
+            "--save_stats"
+        )
+        tile_filter_component = command(
+            name="TileFilter",
+            display_name="Tile Quality Filtering",
+            inputs={"input_path": Input(type=AssetTypes.URI_FOLDER)},
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_output_uri)},
+            code="./",
+            command=filter_cmd,
+            environment=env,
+        )
+
+    # 3) Segmentation (updated to use filtered tiles if available)
     seg_cmd = (
         "python segment.py "
         "--input_path ${{inputs.prepped_tiles_path}} "
@@ -154,7 +192,7 @@ def build_components(
         environment=env,
     )
 
-    # 3) Cluster
+    # 4) Cluster
     cluster_component = command(
         name="Clustering",
         display_name="DBSCAN clustering of cells",
@@ -178,7 +216,7 @@ def build_components(
         environment=env,
     )
 
-    # 4) Classify
+    # 5) Classify
     classify_env = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
     cls_cmd = (
         "python classify.py "
@@ -204,7 +242,7 @@ def build_components(
         environment_variables=classify_env,
     )
 
-    # 5) Post-process
+    # 6) Post-process
     post_cmd = (
         "python post_process.py "
         "--segmentation_path ${{inputs.segmentation_path}} "
@@ -225,13 +263,18 @@ def build_components(
         environment=env,
     )
 
-    return {
+    components = {
         "data_prep"   : data_prep_component,
         "segment"     : segment_component,
         "cluster"     : cluster_component,
         "classify"    : classify_component,
         "post_process": post_process_component,
     }
+    
+    if tile_filter_component:
+        components["tile_filter"] = tile_filter_component
+    
+    return components
 
 # --------------------------------------------------------------------------- #
 # Main driver
@@ -253,7 +296,21 @@ def run_pipeline():
     p.add_argument("--magnifications", type=str, default="1.0",
                    help="Comma-separated list of relative magnifications, e.g. '1.0,0.9,0.8'")
     p.add_argument("--num_tiles", type=int, default=None,
-                   help="Approx. number of tiles per magnification (uniform thinning)")
+                   help="Approx. number of tiles per magnification (uniform thinning)")    # NEW tile filtering params
+    p.add_argument("--filter_tiles", action="store_true",
+                   help="Enable tile filtering to remove background noise")
+    p.add_argument("--filter_min_edge_density", type=float, default=0.02,
+                   help="Minimum edge density (structure content) [0.02]")
+    p.add_argument("--filter_max_bright_ratio", type=float, default=0.8,
+                   help="Maximum ratio of bright pixels (background) [0.8]")
+    p.add_argument("--filter_max_dark_ratio", type=float, default=0.8,
+                   help="Maximum ratio of dark pixels (empty space) [0.8]")
+    p.add_argument("--filter_min_std_intensity", type=float, default=10.0,
+                   help="Minimum intensity standard deviation [10.0]")
+    p.add_argument("--filter_min_laplacian_var", type=float, default=50.0,
+                   help="Minimum Laplacian variance (sharpness) [50.0]")
+    p.add_argument("--filter_min_color_variance", type=float, default=5.0,
+                   help="Minimum color variance across channels [5.0]")
 
     # Classification
     p.add_argument("--classify_per_cluster", type=int, default=10)
@@ -277,13 +334,12 @@ def run_pipeline():
     args = p.parse_args()
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
-    logging.info("Args: %s", vars(args))
-
-    # ------------- Paths & names ------------- #
+    logging.info("Args: %s", vars(args))    # ------------- Paths & names ------------- #
     timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     param_string  = build_param_string(args)
     base_uri      = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v1_{param_string}"
     dp_uri        = f"{base_uri}/data_prep/"
+    filter_uri    = f"{base_uri}/tile_filter/" if args.filter_tiles else None
     seg_uri       = f"{base_uri}/segment/"
     clu_uri       = f"{base_uri}/cluster/"
     cls_uri       = f"{base_uri}/classify/"
@@ -306,12 +362,11 @@ def run_pipeline():
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest",
     )
-    ml_client.environments.create_or_update(env)
-
-    # ------------- Build components ------------- #
+    ml_client.environments.create_or_update(env)    # ------------- Build components ------------- #
     components = build_components(
         env=env,
         data_prep_output_uri=dp_uri,
+        tile_filter_output_uri=filter_uri,
         segment_output_uri=seg_uri,
         cluster_output_uri=clu_uri,
         classify_output_uri=cls_uri,
@@ -321,6 +376,14 @@ def run_pipeline():
         # NEW ↓↓↓
         magnifications=args.magnifications,
         num_tiles=args.num_tiles,
+        # NEW tile filtering params
+        filter_tiles=args.filter_tiles,
+        filter_min_edge_density=args.filter_min_edge_density,
+        filter_max_bright_ratio=args.filter_max_bright_ratio,
+        filter_max_dark_ratio=args.filter_max_dark_ratio,
+        filter_min_std_intensity=args.filter_min_std_intensity,
+        filter_min_laplacian_var=args.filter_min_laplacian_var,
+        filter_min_color_variance=args.filter_min_color_variance,
         # segmentation
         segment_flow_threshold=args.segment_flow_threshold,
         segment_cellprob_threshold=args.segment_cellprob_threshold,
@@ -335,57 +398,69 @@ def run_pipeline():
         cluster_umap_neighbors=args.cluster_umap_neighbors,
         cluster_umap_min_dist=args.cluster_umap_min_dist,
         cluster_umap_metric=args.cluster_umap_metric,
-    )
-
-    # ------------- Define pipelines (unchanged) ------------- #
+    )    # ------------- Define pipelines (updated for tile filtering) ------------- #
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
     def full_pipeline(raw_slides_input):
-        prep  = components["data_prep"](input_data=raw_slides_input)
-        seg   = components["segment"](prepped_tiles_path=prep.outputs.output_path)
-        clu   = components["cluster"](segmentation_path=seg.outputs.output_path,
-                                      prepped_tiles_path=prep.outputs.output_path)
-        cls   = components["classify"](segmented_path=seg.outputs.output_path,
-                                       prepped_tiles_path=prep.outputs.output_path,
-                                       cluster_path=clu.outputs.cluster_output)
-        post  = components["post_process"](segmentation_path=seg.outputs.output_path,
-                                           classification_path=cls.outputs.output_path)
+        prep = components["data_prep"](input_data=raw_slides_input)
+        
+        # Use filtered tiles if filtering is enabled, otherwise use prep output directly
+        if args.filter_tiles and "tile_filter" in components:
+            filtered = components["tile_filter"](input_path=prep.outputs.output_path)
+            tiles_for_segmentation = filtered.outputs.output_path
+            tiles_for_clustering = prep.outputs.output_path  # Use original for clustering reference
+        else:
+            tiles_for_segmentation = prep.outputs.output_path
+            tiles_for_clustering = prep.outputs.output_path
+        
+        seg = components["segment"](prepped_tiles_path=tiles_for_segmentation)
+        clu = components["cluster"](segmentation_path=seg.outputs.output_path,
+                                   prepped_tiles_path=tiles_for_clustering)
+        cls = components["classify"](segmented_path=seg.outputs.output_path,
+                                    prepped_tiles_path=tiles_for_clustering,
+                                    cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=seg.outputs.output_path,
+                                         classification_path=cls.outputs.output_path)
         return {"final_output": post.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only")
     def data_prep_pipeline(slides_in):
         prep = components["data_prep"](input_data=slides_in)
+        if args.filter_tiles and "tile_filter" in components:
+            filtered = components["tile_filter"](input_path=prep.outputs.output_path)
+            return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
         return {"prepped": prep.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Seg→Clu→Cls→Post")
     def seg_cluster_cls_pipeline(prepped_in):
-        seg  = components["segment"](prepped_tiles_path=prepped_in)
-        clu  = components["cluster"](segmentation_path=seg.outputs.output_path,
-                                     prepped_tiles_path=prepped_in)
-        cls  = components["classify"](segmented_path=seg.outputs.output_path,
-                                      prepped_tiles_path=prepped_in,
-                                      cluster_path=clu.outputs.cluster_output)
+        # Assume prepped_in is already filtered if needed
+        seg = components["segment"](prepped_tiles_path=prepped_in)
+        clu = components["cluster"](segmentation_path=seg.outputs.output_path,
+                                   prepped_tiles_path=prepped_in)
+        cls = components["classify"](segmented_path=seg.outputs.output_path,
+                                    prepped_tiles_path=prepped_in,
+                                    cluster_path=clu.outputs.cluster_output)
         post = components["post_process"](segmentation_path=seg.outputs.output_path,
-                                          classification_path=cls.outputs.output_path)
+                                         classification_path=cls.outputs.output_path)
         return {"final_output": post.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Clu→Cls→Post")
     def cluster_cls_pipeline(prepped_in, segmented_in):
-        clu  = components["cluster"](segmentation_path=segmented_in,
-                                     prepped_tiles_path=prepped_in)
-        cls  = components["classify"](segmented_path=segmented_in,
-                                      prepped_tiles_path=prepped_in,
-                                      cluster_path=clu.outputs.cluster_output)
+        clu = components["cluster"](segmentation_path=segmented_in,
+                                   prepped_tiles_path=prepped_in)
+        cls = components["classify"](segmented_path=segmented_in,
+                                    prepped_tiles_path=prepped_in,
+                                    cluster_path=clu.outputs.cluster_output)
         post = components["post_process"](segmentation_path=segmented_in,
-                                          classification_path=cls.outputs.output_path)
+                                         classification_path=cls.outputs.output_path)
         return {"final_output": post.outputs.output_path}
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Cls→Post")
     def classify_only_pipeline(prepped_in, segmented_in, cluster_in):
-        cls  = components["classify"](segmented_path=segmented_in,
-                                      prepped_tiles_path=prepped_in,
-                                      cluster_path=cluster_in)
+        cls = components["classify"](segmented_path=segmented_in,
+                                    prepped_tiles_path=prepped_in,
+                                    cluster_path=cluster_in)
         post = components["post_process"](segmentation_path=segmented_in,
-                                          classification_path=cls.outputs.output_path)
+                                         classification_path=cls.outputs.output_path)
         return {"final_output": post.outputs.output_path}
 
     # ------------- Pick + submit ------------- #
