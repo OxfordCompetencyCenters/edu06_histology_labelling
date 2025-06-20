@@ -99,10 +99,8 @@ def build_components(
     postprocess_output_uri: str,
     classify_per_cluster: int,
     param_string: str,
-    # NEW data-prep params
     magnifications: str,
     num_tiles: int | None,
-    # NEW tile filtering params
     filter_tiles: bool,
     filter_min_edge_density: float,
     filter_max_bright_ratio: float,
@@ -110,11 +108,9 @@ def build_components(
     filter_min_std_intensity: float,
     filter_min_laplacian_var: float,
     filter_min_color_variance: float,
-    # segmentation params
     segment_flow_threshold: float,
     segment_cellprob_threshold: float,
     segment_use_gpu: bool,
-    # cluster params
     cluster_eps: float | None,
     cluster_min_samples: int,
     cluster_use_gpu: bool,
@@ -128,7 +124,6 @@ def build_components(
     """Create the Azure ML command components used in the pipeline."""
     logging.info("Building component objects …")
 
-    # 1) Data Prep — matches new data_prep.py flags
     dp_cmd = (
         "python data_prep.py "
         "--input_data ${{inputs.input_data}} "
@@ -147,7 +142,6 @@ def build_components(
         environment=env,
     )
 
-    # 2) NEW Tile Filter — only created if filtering is enabled
     tile_filter_component = None
     if filter_tiles:
         filter_cmd = (
@@ -172,7 +166,6 @@ def build_components(
             environment=env,
         )
 
-    # 3) Segmentation (updated to use filtered tiles if available)
     seg_cmd = (
         "python segment.py "
         "--input_path ${{inputs.prepped_tiles_path}} "
@@ -192,7 +185,6 @@ def build_components(
         environment=env,
     )
 
-    # 4) Cluster
     cluster_component = command(
         name="Clustering",
         display_name="DBSCAN clustering of cells",
@@ -216,7 +208,6 @@ def build_components(
         environment=env,
     )
 
-    # 5) Classify
     classify_env = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
     cls_cmd = (
         "python classify.py "
@@ -242,7 +233,6 @@ def build_components(
         environment_variables=classify_env,
     )
 
-    # 6) Post-process
     post_cmd = (
         "python post_process.py "
         "--segmentation_path ${{inputs.segmentation_path}} "
@@ -252,7 +242,7 @@ def build_components(
     )
     post_process_component = command(
         name="PostProcess",
-        display_name="Aggregate + visualise results",
+        display_name="Post-processing",
         inputs={
             "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
             "classification_path": Input(type=AssetTypes.URI_FOLDER),
@@ -292,11 +282,11 @@ def run_pipeline():
     p.add_argument("--segmented_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/")
     p.add_argument("--clustered_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/")
 
-    # NEW data-prep params
+    # Data-prep params
     p.add_argument("--magnifications", type=str, default="1.0",
                    help="Comma-separated list of relative magnifications, e.g. '1.0,0.9,0.8'")
     p.add_argument("--num_tiles", type=int, default=None,
-                   help="Approx. number of tiles per magnification (uniform thinning)")    # NEW tile filtering params
+                   help="Approx. number of tiles per magnification (uniform thinning)")
     p.add_argument("--filter_tiles", action="store_true",
                    help="Enable tile filtering to remove background noise")
     p.add_argument("--filter_min_edge_density", type=float, default=0.02,
@@ -373,10 +363,10 @@ def run_pipeline():
         postprocess_output_uri=post_uri,
         classify_per_cluster=args.classify_per_cluster,
         param_string=param_string,
-        # NEW ↓↓↓
+        # Data prep params
         magnifications=args.magnifications,
         num_tiles=args.num_tiles,
-        # NEW tile filtering params
+        # Tile filtering params
         filter_tiles=args.filter_tiles,
         filter_min_edge_density=args.filter_min_edge_density,
         filter_max_bright_ratio=args.filter_max_bright_ratio,
