@@ -25,10 +25,12 @@ RESOURCE_GROUP = "AIMLCC-DEV-RG"
 WORKSPACE_NAME = "edu06_histology_img_segmentation"
 COMPUTE_CLUSTER = "edu06-gpu-compute-cluster"
 
-def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, enable_multi_resolution: bool, num_tiles: int = None) -> str:
-    """Build sam_med data preparation command with multi-resolution support."""    cmd_parts = [
+def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, 
+                                    enable_multi_resolution: bool, num_tiles: int = None) -> str:
+    """Build sam_med data preparation command with multi-resolution support."""
+    cmd_parts = [
         "python data_prep.py",
-        "--input_data ${{inputs.input_data}}",
+        "--input_path ${{inputs.input_data}}",
         "--output_path ${{outputs.output_path}}",
         f"--target_mpp {target_mpp}"
     ]
@@ -39,7 +41,8 @@ def build_sam_med_data_prep_command(tile_sizes: List[int], target_mpp: float, en
     
     if enable_multi_resolution:
         cmd_parts.append("--enable_multi_resolution")
-      if num_tiles is not None:
+        
+    if num_tiles is not None:
         cmd_parts.append(f"--num_tiles {num_tiles}")
     
     return " ".join(cmd_parts)
@@ -119,11 +122,12 @@ def build_components(
     umap_n_components: int,
     umap_n_neighbors: int,
     umap_min_dist: float
-):
-    """Create command components for the pipeline steps."""
+):    """Create command components for the pipeline steps."""
     
     logging.info("Building pipeline components...")
-      # 1. sam_med Data Preparation    data_prep_cmd = build_sam_med_data_prep_command(
+    
+    # 1. sam_med Data Preparation
+    data_prep_cmd = build_sam_med_data_prep_command(
         tile_sizes=tile_sizes,
         target_mpp=target_mpp,
         enable_multi_resolution=enable_multi_resolution,
@@ -297,6 +301,22 @@ def run_pipeline():
                        help="UMAP n_neighbors parameter")
     parser.add_argument("--umap_min_dist", type=float, default=0.1,
                        help="UMAP min_dist parameter")
+
+    # Tile Filtering Parameters
+    parser.add_argument("--filter_tiles", action="store_true",
+                       help="Enable tile filtering to remove background noise")
+    parser.add_argument("--filter_min_edge_density", type=float, default=0.02,
+                       help="Minimum edge density (structure content)")
+    parser.add_argument("--filter_max_bright_ratio", type=float, default=0.8,
+                       help="Maximum ratio of bright pixels (background)")
+    parser.add_argument("--filter_max_dark_ratio", type=float, default=0.8,
+                       help="Maximum ratio of dark pixels (empty space)")
+    parser.add_argument("--filter_min_std_intensity", type=float, default=10.0,
+                       help="Minimum intensity standard deviation")
+    parser.add_argument("--filter_min_laplacian_var", type=float, default=50.0,
+                       help="Minimum Laplacian variance (sharpness)")
+    parser.add_argument("--filter_min_color_variance", type=float, default=5.0,
+                       help="Minimum color variance across channels")
 
     args = parser.parse_args()
     

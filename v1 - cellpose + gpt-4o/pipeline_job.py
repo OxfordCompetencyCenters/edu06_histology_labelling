@@ -324,7 +324,8 @@ def run_pipeline():
     args = p.parse_args()
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
-    logging.info("Args: %s", vars(args))    # ------------- Paths & names ------------- #
+    logging.info("Args: %s", vars(args))
+    # ------------- Paths & names ------------- #
     timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     param_string  = build_param_string(args)
     base_uri      = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v1_{param_string}"
@@ -352,7 +353,8 @@ def run_pipeline():
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest",
     )
-    ml_client.environments.create_or_update(env)    # ------------- Build components ------------- #
+    ml_client.environments.create_or_update(env)
+    # ------------- Build components ------------- #
     components = build_components(
         env=env,
         data_prep_output_uri=dp_uri,
@@ -389,6 +391,7 @@ def run_pipeline():
         cluster_umap_min_dist=args.cluster_umap_min_dist,
         cluster_umap_metric=args.cluster_umap_metric,
     )    # ------------- Define pipelines (updated for tile filtering) ------------- #
+    
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
     def full_pipeline(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
@@ -397,7 +400,7 @@ def run_pipeline():
         if args.filter_tiles and "tile_filter" in components:
             filtered = components["tile_filter"](input_path=prep.outputs.output_path)
             tiles_for_segmentation = filtered.outputs.output_path
-            tiles_for_clustering = prep.outputs.output_path  # Use original for clustering reference
+            tiles_for_clustering = filtered.outputs.output_path  # Use filtered tiles for clustering and classification
         else:
             tiles_for_segmentation = prep.outputs.output_path
             tiles_for_clustering = prep.outputs.output_path
