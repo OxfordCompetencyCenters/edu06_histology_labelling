@@ -47,15 +47,12 @@ def build_param_string(args):
         parts.append("cluGPU")
     if args.cluster_use_umap:
         parts.append(f"umap_{args.cluster_umap_components}")
-    # NEW → record magnifications & target tiles, if any
     parts.append(f"mag_{format_param_for_name(args.magnifications)}")
     if args.num_tiles is not None:
         parts.append(f"ntiles_{args.num_tiles}")
-    # NEW → tile filtering params
     if args.filter_tiles:
         parts.append("filtered")
         parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
-    # NEW → annotation params (if annotations enabled)
     if hasattr(args, 'enable_annotations') and args.enable_annotations:
         parts.append("annotated")
     return "_".join(parts)
@@ -66,13 +63,10 @@ def build_cluster_command(**kwargs) -> str:
         "python cluster.py "
         "--segmentation_path ${{inputs.segmentation_path}} "
         "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-        "--output_path ${{outputs.cluster_output}} "
-    )
-    # positional numeric args
+        "--output_path ${{outputs.cluster_output}} "    )
     if kwargs["cluster_eps"] is not None:
         cmd += f"--eps {kwargs['cluster_eps']} "
     cmd += f"--min_samples {kwargs['cluster_min_samples']} "
-    # flags
     if kwargs["cluster_use_gpu"]:
         cmd += "--gpu "
     if kwargs["cluster_normalize"]:
@@ -372,7 +366,8 @@ def run_pipeline():
     p.add_argument("--cluster_umap_components", type=int, default=50)
     p.add_argument("--cluster_umap_neighbors", type=int, default=15)
     p.add_argument("--cluster_umap_min_dist", type=float, default=0.1)
-    p.add_argument("--cluster_umap_metric", default="euclidean")    # Annotation parameters
+    p.add_argument("--cluster_umap_metric", default="euclidean")
+    
     p.add_argument("--enable_annotations", action="store_true",
                    help="Enable image annotation generation")
     p.add_argument("--annotation_max_labels", type=int, default=100,
@@ -432,7 +427,8 @@ def run_pipeline():
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest",
     )
-    ml_client.environments.create_or_update(env)    # ------------- Build components ------------- #
+    ml_client.environments.create_or_update(env)
+    # ------------- Build components ------------- #
     components = build_components(
         env=env,
         data_prep_output_uri=dp_uri,
@@ -445,7 +441,6 @@ def run_pipeline():
         prepped_tiles_uri=filter_uri if args.filter_tiles else dp_uri,
         classify_per_cluster=args.classify_per_cluster,
         param_string=param_string,
-        # Data prep params
         magnifications=args.magnifications,
         num_tiles=args.num_tiles,
         # Tile filtering params
@@ -482,18 +477,16 @@ def run_pipeline():
         annotation_text_use_cluster_confidence=args.annotation_text_use_cluster_confidence,
         annotation_text_scale=args.annotation_text_scale,
         annotation_color_by=args.annotation_color_by,
-        annotation_filter_unclassified=args.annotation_filter_unclassified,
-    )    # ------------- Define pipelines (updated for tile filtering) ------------- #
+        annotation_filter_unclassified=args.annotation_filter_unclassified,    )
     
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
     def full_pipeline(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
         
-        # Use filtered tiles if filtering is enabled, otherwise use prep output directly
         if args.filter_tiles and "tile_filter" in components:
             filtered = components["tile_filter"](input_path=prep.outputs.output_path)
             tiles_for_segmentation = filtered.outputs.output_path
-            tiles_for_clustering = filtered.outputs.output_path  # Use filtered tiles for clustering and classification
+            tiles_for_clustering = filtered.outputs.output_path
         else:
             tiles_for_segmentation = prep.outputs.output_path
             tiles_for_clustering = prep.outputs.output_path
@@ -509,7 +502,6 @@ def run_pipeline():
         
         outputs = {"final_output": post.outputs.output_path}
         
-        # Add annotation step if enabled
         if args.enable_annotations and "annotation" in components:
             annotate = components["annotation"](annotations_json=post.outputs.output_path,
                                               prepped_tiles_path=tiles_for_clustering)
@@ -524,10 +516,8 @@ def run_pipeline():
             filtered = components["tile_filter"](input_path=prep.outputs.output_path)
             return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
         return {"prepped": prep.outputs.output_path}
-
     @pipeline(compute=COMPUTE_CLUSTER, description="Seg→Clu→Cls→Post")
     def seg_cluster_cls_pipeline(prepped_in):
-        # Assume prepped_in is already filtered if needed
         seg = components["segment"](prepped_tiles_path=prepped_in)
         clu = components["cluster"](segmentation_path=seg.outputs.output_path,
                                    prepped_tiles_path=prepped_in)
@@ -539,14 +529,12 @@ def run_pipeline():
         
         outputs = {"final_output": post.outputs.output_path}
         
-        # Add annotation step if enabled
         if args.enable_annotations and "annotation" in components:
             annotate = components["annotation"](annotations_json=post.outputs.output_path,
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
         return outputs
-
     @pipeline(compute=COMPUTE_CLUSTER, description="Clu→Cls→Post")
     def cluster_cls_pipeline(prepped_in, segmented_in):
         clu = components["cluster"](segmentation_path=segmented_in,
@@ -559,14 +547,12 @@ def run_pipeline():
         
         outputs = {"final_output": post.outputs.output_path}
         
-        # Add annotation step if enabled
         if args.enable_annotations and "annotation" in components:
             annotate = components["annotation"](annotations_json=post.outputs.output_path,
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
         return outputs
-
     @pipeline(compute=COMPUTE_CLUSTER, description="Cls→Post")
     def classify_only_pipeline(prepped_in, segmented_in, cluster_in):
         cls = components["classify"](segmented_path=segmented_in,
@@ -577,14 +563,12 @@ def run_pipeline():
         
         outputs = {"final_output": post.outputs.output_path}
         
-        # Add annotation step if enabled
         if args.enable_annotations and "annotation" in components:
             annotate = components["annotation"](annotations_json=post.outputs.output_path,
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
         return outputs
-
     @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing results")
     def annotate_only_pipeline(postprocess_in, prepped_in):
         if "annotation" in components:
@@ -592,7 +576,6 @@ def run_pipeline():
                                               prepped_tiles_path=prepped_in)
             return {"annotations": annotate.outputs.output_path}
         else:
-            # Return empty if annotations not enabled
             return {"message": "Annotations not enabled"}
 
     # ------------- Pick + submit ------------- #
