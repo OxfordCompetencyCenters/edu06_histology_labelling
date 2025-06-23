@@ -20,15 +20,23 @@ logging.basicConfig(
 
 def parse_slide_name(tile_name):
     """
-    Given a tile name like:
-        '202 Human Pancreas Gomori C.A.H.R - 2012-08-08_x0_y0'
-    returns the slide portion:
-        '202 Human Pancreas Gomori C.A.H.R - 2012-08-08'
-    by removing the trailing '_x####_y####'.
+    Extract slide name from tile filename using new format only.
+    
+    New format: 'slide_id__MAG_1d000__X_2048__Y_1024__IDX_000001.png' -> 'slide_id'
     """
-    # Robustly handle potential variations like no extension or different extensions
-    base_name = os.path.splitext(tile_name)[0]
-    return re.sub(r"_x\d+_y\d+$", "", base_name)
+    # Remove .png extension if present
+    if tile_name.endswith('.png') or tile_name.endswith('.PNG'):
+        base_name = tile_name[:-4]
+    else:
+        base_name = tile_name
+    
+    # New format only: slide_id is everything before the first __MAG_
+    if "__MAG_" in base_name:
+        slide_id = base_name.split("__MAG_")[0]
+        return slide_id
+    else:
+        # If it doesn't match new format, return as-is
+        return base_name
 
 def get_tile_info(bbox_file, prepped_tiles_path):
     """Helper function to derive tile/slide info from bbox_file path."""
@@ -337,13 +345,7 @@ def main():
 
             except Exception as e:
                 logging.error(f"Error processing tile {tile_path}: {e}. Skipping classification for cells in this tile.")
-                # Optionally add errored entries here if needed
 
-
-    # ------------------------------------------------------------------
-    # Restructure results (Group by tile) - This part remains largely the same,
-    # but now operates on `all_cell_results` which contains ALL cells.
-    # ------------------------------------------------------------------
     logging.info("Restructuring classification results...")
     grouped_by_tile = {}
     for result in all_cell_results:

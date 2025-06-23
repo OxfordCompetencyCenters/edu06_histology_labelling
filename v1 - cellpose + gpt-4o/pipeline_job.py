@@ -55,6 +55,9 @@ def build_param_string(args):
     if args.filter_tiles:
         parts.append("filtered")
         parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
+    # NEW → annotation params (if annotations enabled)
+    if hasattr(args, 'enable_annotations') and args.enable_annotations:
+        parts.append("annotated")
     return "_".join(parts)
 
 def build_cluster_command(**kwargs) -> str:
@@ -97,6 +100,8 @@ def build_components(
     cluster_output_uri: str,
     classify_output_uri: str,
     postprocess_output_uri: str,
+    annotation_output_uri: str,
+    prepped_tiles_uri: str,
     classify_per_cluster: int,
     param_string: str,
     magnifications: str,
@@ -120,6 +125,19 @@ def build_components(
     cluster_umap_neighbors: int,
     cluster_umap_min_dist: float,
     cluster_umap_metric: str,
+    # Annotation parameters
+    enable_annotations: bool,
+    annotation_max_labels: int,
+    annotation_random_labels: bool,
+    annotation_draw_bbox: bool,
+    annotation_draw_polygon: bool,
+    annotation_no_text: bool,
+    annotation_text_use_pred_class: bool,
+    annotation_text_use_cluster_id: bool,
+    annotation_text_use_cluster_confidence: bool,
+    annotation_text_scale: float,
+    annotation_color_by: str,
+    annotation_filter_unclassified: bool,
 ):
     """Create the Azure ML command components used in the pipeline."""
     logging.info("Building component objects …")
@@ -247,11 +265,42 @@ def build_components(
             "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
             "classification_path": Input(type=AssetTypes.URI_FOLDER),
         },
-        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},
-        code="./",
+        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},        code="./",
         command=post_cmd,
         environment=env,
     )
+
+    annotation_component = None
+    if enable_annotations:
+        annotation_cmd = (
+            "python annotate_local_images.py "
+            "--json_dir ${{inputs.annotations_json}} "
+            "--images_dir ${{inputs.prepped_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--max_labels {annotation_max_labels} "
+            f"{'--random_labels ' if annotation_random_labels else ''}"
+            f"{'--draw_bbox ' if annotation_draw_bbox else ''}"
+            f"{'--draw_polygon ' if annotation_draw_polygon else ''}"
+            f"{'--no_text ' if annotation_no_text else ''}"
+            f"{'--text_use_pred_class ' if annotation_text_use_pred_class else ''}"
+            f"{'--text_use_cluster_id ' if annotation_text_use_cluster_id else ''}"
+            f"{'--text_use_cluster_confidence ' if annotation_text_use_cluster_confidence else ''}"
+            f"--text_scale {annotation_text_scale} "
+            f"--color_by {annotation_color_by} "
+            f"{'--filter_unclassified ' if annotation_filter_unclassified else ''}"
+        )
+        annotation_component = command(
+            name="Annotation",
+            display_name="Image Annotation",
+            inputs={
+                "annotations_json": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=annotation_output_uri)},
+            code="./",
+            command=annotation_cmd.strip(),
+            environment=env,
+        )
 
     components = {
         "data_prep"   : data_prep_component,
@@ -264,6 +313,9 @@ def build_components(
     if tile_filter_component:
         components["tile_filter"] = tile_filter_component
     
+    if annotation_component:
+        components["annotation"] = annotation_component
+    
     return components
 
 # --------------------------------------------------------------------------- #
@@ -273,7 +325,7 @@ def run_pipeline():
     # ---------------- CLI ---------------- #
     p = argparse.ArgumentParser("Launch Azure ML histology pipeline")
     p.add_argument("--mode", choices=[
-        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only"
+        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only"
     ], default="full")
 
     # Input URIs
@@ -281,6 +333,7 @@ def run_pipeline():
     p.add_argument("--prepped_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/")
     p.add_argument("--segmented_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/")
     p.add_argument("--clustered_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/")
+    p.add_argument("--postprocess_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_postprocess_data/")
 
     # Data-prep params
     p.add_argument("--magnifications", type=str, default="1.0",
@@ -319,7 +372,32 @@ def run_pipeline():
     p.add_argument("--cluster_umap_components", type=int, default=50)
     p.add_argument("--cluster_umap_neighbors", type=int, default=15)
     p.add_argument("--cluster_umap_min_dist", type=float, default=0.1)
-    p.add_argument("--cluster_umap_metric", default="euclidean")
+    p.add_argument("--cluster_umap_metric", default="euclidean")    # Annotation parameters
+    p.add_argument("--enable_annotations", action="store_true",
+                   help="Enable image annotation generation")
+    p.add_argument("--annotation_max_labels", type=int, default=100,
+                   help="Maximum number of labels to draw per image")
+    p.add_argument("--annotation_random_labels", action="store_true",
+                   help="Pick labels randomly up to max_labels")
+    p.add_argument("--annotation_draw_bbox", action="store_true",
+                   help="Draw bounding boxes")
+    p.add_argument("--annotation_draw_polygon", action="store_true", default=True,
+                   help="Draw polygons")
+    p.add_argument("--annotation_no_text", action="store_true", default=True,
+                   help="Do not draw text labels")
+    p.add_argument("--annotation_text_use_pred_class", action="store_true",
+                   help="Include predicted class in text labels")
+    p.add_argument("--annotation_text_use_cluster_id", action="store_true",
+                   help="Include cluster ID in text labels")
+    p.add_argument("--annotation_text_use_cluster_confidence", action="store_true",
+                   help="Include cluster confidence in text labels")
+    p.add_argument("--annotation_text_scale", type=float, default=0.5,
+                   help="Scale factor for text size")
+    p.add_argument("--annotation_color_by", default="cluster_id",
+                   choices=["pred_class", "cluster_id", "none"],
+                   help="Attribute to use for color-coding shapes")
+    p.add_argument("--annotation_filter_unclassified", action="store_true", default=True,
+                   help="Filter out unclassified cells")
 
     args = p.parse_args()
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
@@ -335,6 +413,7 @@ def run_pipeline():
     clu_uri       = f"{base_uri}/cluster/"
     cls_uri       = f"{base_uri}/classify/"
     post_uri      = f"{base_uri}/postprocess/"
+    annotation_uri = f"{base_uri}/annotations/" if args.enable_annotations else None
 
     # ------------- Azure ML client / env ------------- #
     try:
@@ -353,8 +432,7 @@ def run_pipeline():
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest",
     )
-    ml_client.environments.create_or_update(env)
-    # ------------- Build components ------------- #
+    ml_client.environments.create_or_update(env)    # ------------- Build components ------------- #
     components = build_components(
         env=env,
         data_prep_output_uri=dp_uri,
@@ -363,6 +441,8 @@ def run_pipeline():
         cluster_output_uri=clu_uri,
         classify_output_uri=cls_uri,
         postprocess_output_uri=post_uri,
+        annotation_output_uri=annotation_uri,
+        prepped_tiles_uri=filter_uri if args.filter_tiles else dp_uri,
         classify_per_cluster=args.classify_per_cluster,
         param_string=param_string,
         # Data prep params
@@ -390,6 +470,19 @@ def run_pipeline():
         cluster_umap_neighbors=args.cluster_umap_neighbors,
         cluster_umap_min_dist=args.cluster_umap_min_dist,
         cluster_umap_metric=args.cluster_umap_metric,
+        # Annotation parameters
+        enable_annotations=args.enable_annotations,
+        annotation_max_labels=args.annotation_max_labels,
+        annotation_random_labels=args.annotation_random_labels,
+        annotation_draw_bbox=args.annotation_draw_bbox,
+        annotation_draw_polygon=args.annotation_draw_polygon,
+        annotation_no_text=args.annotation_no_text,
+        annotation_text_use_pred_class=args.annotation_text_use_pred_class,
+        annotation_text_use_cluster_id=args.annotation_text_use_cluster_id,
+        annotation_text_use_cluster_confidence=args.annotation_text_use_cluster_confidence,
+        annotation_text_scale=args.annotation_text_scale,
+        annotation_color_by=args.annotation_color_by,
+        annotation_filter_unclassified=args.annotation_filter_unclassified,
     )    # ------------- Define pipelines (updated for tile filtering) ------------- #
     
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
@@ -413,7 +506,16 @@ def run_pipeline():
                                     cluster_path=clu.outputs.cluster_output)
         post = components["post_process"](segmentation_path=seg.outputs.output_path,
                                          classification_path=cls.outputs.output_path)
-        return {"final_output": post.outputs.output_path}
+        
+        outputs = {"final_output": post.outputs.output_path}
+        
+        # Add annotation step if enabled
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](annotations_json=post.outputs.output_path,
+                                              prepped_tiles_path=tiles_for_clustering)
+            outputs["annotations"] = annotate.outputs.output_path
+        
+        return outputs
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only")
     def data_prep_pipeline(slides_in):
@@ -434,7 +536,16 @@ def run_pipeline():
                                     cluster_path=clu.outputs.cluster_output)
         post = components["post_process"](segmentation_path=seg.outputs.output_path,
                                          classification_path=cls.outputs.output_path)
-        return {"final_output": post.outputs.output_path}
+        
+        outputs = {"final_output": post.outputs.output_path}
+        
+        # Add annotation step if enabled
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](annotations_json=post.outputs.output_path,
+                                              prepped_tiles_path=prepped_in)
+            outputs["annotations"] = annotate.outputs.output_path
+        
+        return outputs
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Clu→Cls→Post")
     def cluster_cls_pipeline(prepped_in, segmented_in):
@@ -445,7 +556,16 @@ def run_pipeline():
                                     cluster_path=clu.outputs.cluster_output)
         post = components["post_process"](segmentation_path=segmented_in,
                                          classification_path=cls.outputs.output_path)
-        return {"final_output": post.outputs.output_path}
+        
+        outputs = {"final_output": post.outputs.output_path}
+        
+        # Add annotation step if enabled
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](annotations_json=post.outputs.output_path,
+                                              prepped_tiles_path=prepped_in)
+            outputs["annotations"] = annotate.outputs.output_path
+        
+        return outputs
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Cls→Post")
     def classify_only_pipeline(prepped_in, segmented_in, cluster_in):
@@ -454,7 +574,26 @@ def run_pipeline():
                                     cluster_path=cluster_in)
         post = components["post_process"](segmentation_path=segmented_in,
                                          classification_path=cls.outputs.output_path)
-        return {"final_output": post.outputs.output_path}
+        
+        outputs = {"final_output": post.outputs.output_path}
+        
+        # Add annotation step if enabled
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](annotations_json=post.outputs.output_path,
+                                              prepped_tiles_path=prepped_in)
+            outputs["annotations"] = annotate.outputs.output_path
+        
+        return outputs
+
+    @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing results")
+    def annotate_only_pipeline(postprocess_in, prepped_in):
+        if "annotation" in components:
+            annotate = components["annotation"](annotations_json=postprocess_in,
+                                              prepped_tiles_path=prepped_in)
+            return {"annotations": annotate.outputs.output_path}
+        else:
+            # Return empty if annotations not enabled
+            return {"message": "Annotations not enabled"}
 
     # ------------- Pick + submit ------------- #
     mode = args.mode
@@ -476,6 +615,14 @@ def run_pipeline():
             prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
             segmented_in=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri),
             cluster_in=Input(type=AssetTypes.URI_FOLDER, path=args.clustered_data_uri),
+        )
+    elif mode == "annotate_only":
+        if not args.enable_annotations:
+            logging.error("annotate_only mode requires --enable_annotations flag")
+            return
+        job = annotate_only_pipeline(
+            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
+            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
         )
     else:  # full
         job = full_pipeline(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))

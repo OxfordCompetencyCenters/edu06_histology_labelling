@@ -1,7 +1,7 @@
 from __future__ import annotations
-import argparse, logging, math, os, sys
+import argparse, logging, math, os, sys, hashlib
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Generator
 
 import openslide
 from PIL import Image
@@ -17,13 +17,37 @@ def parse_magnifications(mag_str: str) -> List[float]:
     return factors
 
 
+def generate_slide_id(slide_name: str) -> str:
+    """Generate a short, filesystem-safe ID from slide name."""
+    # Clean the slide name first
+    clean_name = "".join(c for c in slide_name if c.isalnum() or c in " -_")
+    # Take first 20 chars and add hash for uniqueness
+    short_name = clean_name[:20].strip()
+    hash_suffix = hashlib.md5(slide_name.encode()).hexdigest()[:8]
+    return f"{short_name}_{hash_suffix}".replace(" ", "_")
+
+
+def format_magnification_tag(mag: float) -> str:
+    """Convert magnification to readable format: 1.0 -> 1d000, 0.7 -> 0d700."""
+    int_part = int(mag)
+    frac_part = int((mag - int_part) * 1000)
+    return f"{int_part}d{frac_part:03d}"
+
+
+def create_tile_filename(slide_id: str, mag: float, x: int, y: int, idx: int) -> str:
+    """Create standardized tile filename using delimiter-based format."""
+    mag_tag = format_magnification_tag(mag)
+    # Format: slideID__MAG_magvalue__X_xvalue__Y_yvalue__IDX_idxvalue.png
+    return f"{slide_id}__MAG_{mag_tag}__X_{x}__Y_{y}__IDX_{idx:06d}.png"
+
+
 def compute_step_multiplier(total_tiles: int, requested: int | None) -> int:
     if requested is None or requested >= total_tiles:
         return 1
     return math.ceil(math.sqrt(total_tiles / requested))
 
 
-def iter_grid_positions(w: int, h: int, edge: int, stride: int) -> Tuple[int, int]:
+def iter_grid_positions(w: int, h: int, edge: int, stride: int) -> Generator[Tuple[int, int], None, None]:
     max_x, max_y = w - edge, h - edge
     for y in range(0, max_y + 1, stride):
         for x in range(0, max_x + 1, stride):
@@ -42,12 +66,16 @@ def tile_slide(
 
     magnifications = magnifications or [1.0]
     slide_name = slide_path.stem
+    slide_id = generate_slide_id(slide_name)  # Generate filesystem-safe ID
     out_dir = out_root / slide_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     logging.info("→ Opening slide: %s", slide_path)
+    logging.info("→ Slide ID: %s", slide_id)
     slide = openslide.OpenSlide(str(slide_path))
     base_w, base_h = slide.dimensions
+
+    tile_idx = 0  # Global tile counter for unique IDs
 
     for mag in magnifications:
         src_edge = int(round(tile_size / mag))
@@ -62,7 +90,6 @@ def tile_slide(
         est_tiles = ((base_w - src_edge) // stride + 1) * (
             (base_h - src_edge) // stride + 1
         )
-        mag_tag = f"{mag:.3f}".replace(".", "p")       # ← **dot → 'p'**
 
         with tqdm(total=est_tiles, desc=f"{slide_name} | mag {mag}", unit="tile",
                   leave=False) as pbar:
@@ -71,18 +98,19 @@ def tile_slide(
                 if src_edge != tile_size:
                     region = region.resize((tile_size, tile_size), Image.LANCZOS)
 
-                out_name = f"{slide_name}_mag{mag_tag}_x{x}_y{y}.png"
+                out_name = create_tile_filename(slide_id, mag, x, y, tile_idx)
                 region.save(out_dir / out_name)
+                tile_idx += 1
                 pbar.update(1)
 
     # thumbnail
     thumb_lvl = slide.level_count - 1
     thumb = slide.read_region((0, 0), thumb_lvl, slide.level_dimensions[thumb_lvl]) \
                  .convert("RGB").resize((tile_size, tile_size), Image.BICUBIC)
-    thumb.save(out_dir / f"{slide_name}_thumbnail.png")
+    thumb.save(out_dir / f"{slide_id}__THUMBNAIL.png")
 
     slide.close()
-    logging.info("✓ Finished %s", slide_name)
+    logging.info("✓ Finished %s (ID: %s)", slide_name, slide_id)
 
 
 # ───────────────────────────── CLI ───────────────────────────── #

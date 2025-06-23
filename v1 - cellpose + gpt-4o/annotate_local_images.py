@@ -7,6 +7,7 @@ import random
 import cv2
 import numpy as np
 import hashlib # Used for generating consistent colors
+import glob
 
 # --- Color Generation ---
 # Cache for generated colors to ensure consistency within a run
@@ -53,6 +54,92 @@ def draw_bbox(img, bbox, color=(255, 0, 0), thickness=2):
     x_min, y_min, x_max, y_max = map(int, bbox) # Ensure integer coordinates
     cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color=color, thickness=thickness)
 
+def resolve_local_image_path(tile_path, images_dir):
+    """
+    Resolve the tile_path to find the corresponding local image file.
+    
+    Args:
+        tile_path: The tile path from the JSON (could be absolute or relative)
+        images_dir: Base directory containing the local images
+    
+    Returns:
+        The resolved local image path
+    """
+    # Try different path resolution strategies
+    
+    # Strategy 1: Extract filename and search in images_dir structure
+    filename = os.path.basename(tile_path)
+    
+    # Strategy 2: Look for common path markers and extract relative path
+    path_markers = [
+        "INPUT_prepped_tiles_path/",
+        "prepped_tiles_path/", 
+        "/prepped_tiles/",
+        "/tiles/"
+    ]
+    
+    subpath = filename  # Default fallback
+    
+    for marker in path_markers:
+        if marker in tile_path:
+            parts = tile_path.split(marker, 1)
+            if len(parts) > 1:
+                subpath = parts[1].lstrip("/\\")
+                break
+    
+    # Strategy 3: Try to find the file by searching in the images directory
+    potential_paths = [
+        os.path.join(images_dir, subpath),
+        os.path.join(images_dir, filename),
+        # Try with slide name subdirectory structure
+        os.path.join(images_dir, os.path.dirname(subpath), filename) if '/' in subpath or '\\' in subpath else None
+    ]
+    
+    # Filter out None values
+    potential_paths = [p for p in potential_paths if p is not None]
+    
+    # Return the first existing path
+    for path in potential_paths:
+        if os.path.exists(path):
+            return path
+    
+    # If nothing found, return the most likely path for error reporting
+    return os.path.join(images_dir, subpath)
+
+def find_annotation_json(json_path):
+    """
+    Find the annotation JSON file from either a direct file path or a directory.
+    
+    Args:
+        json_path: Path to a JSON file or directory containing JSON files
+        
+    Returns:
+        Path to the annotation JSON file
+    """
+    if os.path.isfile(json_path):
+        return json_path
+    
+    if os.path.isdir(json_path):
+        # Look for common annotation file patterns
+        patterns = [
+            "*.json",
+            "*annotations.json",
+            "*_annotations.json",
+            "final_annotations.json",
+            "v1_*_annotations.json"
+        ]
+        
+        for pattern in patterns:
+            matches = glob.glob(os.path.join(json_path, pattern))
+            if matches:
+                # Return the first match, preferring files with "annotation" in the name
+                annotation_files = [f for f in matches if "annotation" in os.path.basename(f).lower()]
+                if annotation_files:
+                    return annotation_files[0]
+                return matches[0]
+    
+    raise FileNotFoundError(f"No JSON annotation file found at {json_path}")
+
 # --- Annotation Logic ---
 def annotate_images(json_file, images_dir, output_dir,
                     max_labels, random_labels,
@@ -84,17 +171,9 @@ def annotate_images(json_file, images_dir, output_dir,
             print(f"Warning: Missing 'tile_path' in item. Skipping.")
             continue
 
-        # Extract the subpath (logic retained from previous version)
-        base_path_marker = "INPUT_prepped_tiles_path/"
-        subpath = os.path.basename(tile_path) # Default to basename
-        if base_path_marker in tile_path:
-             parts = tile_path.split(base_path_marker, 1)
-             if len(parts) > 1:
-                 subpath = parts[1].lstrip("/")
-        else:
-            print(f"Warning: '{base_path_marker}' not found in tile_path '{tile_path}'. Using filename '{subpath}'.")
-
-        local_image_path = os.path.join(images_dir, subpath)
+        # Use improved path resolution
+        local_image_path = resolve_local_image_path(tile_path, images_dir)
+        subpath = os.path.relpath(local_image_path, images_dir)
 
         if not os.path.exists(local_image_path):
             print(f"Warning: {local_image_path} does not exist. Skipping.")
@@ -251,18 +330,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Draw bounding boxes and/or polygons on images with customizable text and colors.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter # Show defaults in help
-        )
-
-    # Input/Output Arguments
-    parser.add_argument("--json_file", type=str, required=True,
+        )    # Input/Output Arguments
+    parser.add_argument("--json_file", type=str, 
                         help="Path to the label JSON file.")
+    parser.add_argument("--json_dir", type=str,
+                        help="Directory containing the label JSON file.")
     parser.add_argument("--images_dir", type=str, required=True,
                         help="Directory containing the source images.")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="Directory to save the annotated images.")
-
-    # Annotation Content Control
-    parser.add_argument("--max_labels", type=int, default=999999,
+                        help="Directory to save the annotated images.")    # Annotation Content Control
+    parser.add_argument("--max_labels", type=int, default=100,
                         help="Maximum number of labels (shapes) to draw per image.")
     parser.add_argument("--random_labels", action="store_true",
                         help="Pick labels randomly up to max_labels from the (potentially filtered) list.")
@@ -270,11 +347,11 @@ def main():
     # Shape Drawing Control
     parser.add_argument("--draw_bbox", action="store_true",
                         help="If set, draw bounding boxes.")
-    parser.add_argument("--draw_polygon", action="store_true",
+    parser.add_argument("--draw_polygon", action="store_true", default=True,
                         help="If set, draw polygons.")
 
-    # Text Content Control
-    parser.add_argument("--no_text", action="store_true",
+    # Text Content Control  
+    parser.add_argument("--no_text", action="store_true", default=True,
                         help="If set, do NOT draw any text labels on the image.")
     parser.add_argument("--text_use_pred_class", action="store_true",
                         help="Include predicted class in the text label (ignored if --no_text).")
@@ -286,16 +363,29 @@ def main():
                         help="Scale factor for label text size (ignored if --no_text).")
 
     # Color Coding Control
-    parser.add_argument("--color_by", type=str, default="pred_class",
+    parser.add_argument("--color_by", type=str, default="cluster_id",
                         choices=["pred_class", "cluster_id", "none"],
                         help="Attribute to use for color-coding shapes. 'none' uses default white.")
 
     # Filtering Control
-    parser.add_argument("--filter_unclassified", action="store_true",
+    parser.add_argument("--filter_unclassified", action="store_true", default=True,
                         help="Filter out cells with pred_class='Unclassified' IF --text_use_pred_class or --color_by=pred_class is set.")
 
 
     args = parser.parse_args()
+
+    # Determine JSON file path
+    if args.json_file and args.json_dir:
+        print("Error: Specify either --json_file or --json_dir, not both.")
+        return
+    elif args.json_file:
+        json_path = args.json_file
+    elif args.json_dir:
+        json_path = find_annotation_json(args.json_dir)
+        print(f"Found annotation file: {json_path}")
+    else:
+        print("Error: Must specify either --json_file or --json_dir.")
+        return
 
     # Basic validation
     if not (args.draw_bbox or args.draw_polygon):
@@ -307,9 +397,14 @@ def main():
     if args.no_text and (args.text_use_pred_class or args.text_use_cluster_id or args.text_use_cluster_confidence):
         print("Info: --no_text is set. Flags --text_use_* will be ignored.")
 
+    # Auto-enable common defaults based on provided example command
+    if not any([args.draw_bbox, args.draw_polygon]):
+        # Default to drawing polygons if available
+        args.draw_polygon = True
+        print("Info: Auto-enabled --draw_polygon since no drawing mode was specified.")
 
     annotate_images(
-        json_file=args.json_file,
+        json_file=json_path,
         images_dir=args.images_dir,
         output_dir=args.output_dir,
         max_labels=args.max_labels,

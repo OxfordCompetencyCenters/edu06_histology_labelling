@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, glob, json, logging, os, re
+import argparse, glob, json, logging, os
 from pathlib import Path
 
 import numpy as np
@@ -8,14 +8,75 @@ from skimage import measure
 
 # ─────────────────────────── helpers ─────────────────────────── #
 
-_TILE_REGEX = re.compile(
-    r"""                # e.g.  Slide42_mag0p900_x2048_y1024.png
-    _mag(?P<mag>[0-9]+p[0-9]+)
-    _x(?P<x>\d+)
-    _y(?P<y>\d+)
-    \.png$""",
-    re.VERBOSE,
-)
+def parse_tile_filename(filename: str) -> dict | None:
+    """
+    Parse new tile filename format without regex.
+    Example: 'slide_id__MAG_1d000__X_2048__Y_1024__IDX_000001.png'
+    Returns: {'slide_id': 'slide_id', 'magnification': 1.0, 'x': 2048, 'y': 1024, 'idx': 1}
+    """
+    # Remove directory path if present
+    basename = os.path.basename(filename)
+    
+    # Remove .png extension if present
+    if basename.endswith('.png'):
+        basename = basename[:-4]
+    
+    # Check if it contains the new format markers
+    if '__MAG_' not in basename or '__X_' not in basename or '__Y_' not in basename or '__IDX_' not in basename:
+        return None
+    
+    try:
+        # Split by double underscores to get main components
+        parts = basename.split('__')
+        if len(parts) != 5:  # slide_id, MAG_xxx, X_xxx, Y_xxx, IDX_xxx
+            return None
+        
+        slide_id = parts[0]
+        
+        # Parse magnification: MAG_1d000 -> 1.000
+        mag_part = parts[1]
+        if not mag_part.startswith('MAG_'):
+            return None
+        mag_value = mag_part[4:]  # Remove 'MAG_' prefix
+        if 'd' not in mag_value:
+            return None
+        int_part, frac_part = mag_value.split('d')
+        magnification = int(int_part) + (int(frac_part) / 1000.0)
+        
+        # Parse X coordinate: X_2048 -> 2048
+        x_part = parts[2]
+        if not x_part.startswith('X_'):
+            return None
+        x = int(x_part[2:])
+        
+        # Parse Y coordinate: Y_1024 -> 1024
+        y_part = parts[3]
+        if not y_part.startswith('Y_'):
+            return None
+        y = int(y_part[2:])
+        
+        # Parse index: IDX_000001 -> 1
+        idx_part = parts[4]
+        if not idx_part.startswith('IDX_'):
+            return None
+        idx = int(idx_part[4:])
+        
+        return {
+            "slide_id": slide_id,
+            "magnification": magnification,
+            "x": x,
+            "y": y,
+            "idx": idx,
+        }
+        
+    except (ValueError, IndexError):
+        return None
+
+def parse_tile_meta(tile_name: str) -> dict[str, float | int] | None:
+    """
+    Parse tile metadata from filename using the new format only.
+    """
+    return parse_tile_filename(tile_name)
 
 def mask_to_polygon_list(mask: np.ndarray):
     """Convert a labelled mask to a list of polygons (one per label ID)."""
@@ -43,21 +104,6 @@ def find_classification_file(cls_root: Path) -> Path | None:
     if candidates:
         return candidates[0]
     return None
-
-def parse_tile_meta(tile_name: str) -> dict[str, float | int] | None:
-    """
-    Given 'Slide_mag1p000_x2048_y1024.png' return:
-    {'magnification': 1.0, 'x': 2048, 'y': 1024}
-    """
-    m = _TILE_REGEX.search(tile_name)
-    if not m:
-        return None
-    mag = float(m.group("mag").replace("p", ".", 1))
-    return {
-        "magnification": mag,
-        "x": int(m.group("x")),
-        "y": int(m.group("y")),
-    }
 
 # ───────────────────────────── main ───────────────────────────── #
 
@@ -116,7 +162,6 @@ def main():
                 logging.debug("No class for lbl=%d in %s", lbl_id, tile_name)
                 continue
             cell_records.append({
-                **meta,                       # magnification, x, y
                 "label_id": lbl_id,
                 "polygon": poly["polygon"],
                 "pred_class": cls_cell["pred_class"],
@@ -127,7 +172,9 @@ def main():
 
         final_ann.append({
             "tile_path": tile_path,
-            **meta,
+            "magnification": meta["magnification"],
+            "x": meta["x"],
+            "y": meta["y"],
             "cells": cell_records,
         })
 
