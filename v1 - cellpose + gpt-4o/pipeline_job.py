@@ -441,6 +441,7 @@ def run_pipeline():
         prepped_tiles_uri=filter_uri if args.filter_tiles else dp_uri,
         classify_per_cluster=args.classify_per_cluster,
         param_string=param_string,
+        # Data prep params
         magnifications=args.magnifications,
         num_tiles=args.num_tiles,
         # Tile filtering params
