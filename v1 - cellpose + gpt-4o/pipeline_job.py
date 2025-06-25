@@ -55,6 +55,12 @@ def build_param_string(args):
         parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
     if hasattr(args, 'enable_annotations') and args.enable_annotations:
         parts.append("annotated")
+    if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
+        parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
+        if args.cluster_analyzer_max_items is not None:
+            parts.append(f"maxper_{args.cluster_analyzer_max_items}")
+    if hasattr(args, 'enable_filtered_annotations') and args.enable_filtered_annotations:
+        parts.append("filteredAnnotated")
     return "_".join(parts)
 
 def build_cluster_command(**kwargs) -> str:
@@ -95,6 +101,8 @@ def build_components(
     classify_output_uri: str,
     postprocess_output_uri: str,
     annotation_output_uri: str,
+    cluster_tiles_output_uri: str,
+    filtered_annotation_output_uri: str,
     prepped_tiles_uri: str,
     classify_per_cluster: int,
     param_string: str,
@@ -132,6 +140,23 @@ def build_components(
     annotation_text_scale: float,
     annotation_color_by: str,
     annotation_filter_unclassified: bool,
+    # Cluster analyzer parameters
+    enable_cluster_tiles: bool,
+    cluster_analyzer_confidence_threshold: float,
+    cluster_analyzer_max_items: int,
+    # Filtered annotation parameters
+    enable_filtered_annotations: bool,
+    filtered_annotation_max_labels: int,
+    filtered_annotation_random_labels: bool,
+    filtered_annotation_draw_bbox: bool,
+    filtered_annotation_draw_polygon: bool,
+    filtered_annotation_no_text: bool,
+    filtered_annotation_text_use_pred_class: bool,
+    filtered_annotation_text_use_cluster_id: bool,
+    filtered_annotation_text_use_cluster_confidence: bool,
+    filtered_annotation_text_scale: float,
+    filtered_annotation_color_by: str,
+    filtered_annotation_filter_unclassified: bool,
 ):
     """Create the Azure ML command components used in the pipeline."""
     logging.info("Building component objects …")
@@ -259,7 +284,8 @@ def build_components(
             "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
             "classification_path": Input(type=AssetTypes.URI_FOLDER),
         },
-        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},        code="./",
+        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},
+        code="./",
         command=post_cmd,
         environment=env,
     )
@@ -296,6 +322,60 @@ def build_components(
             environment=env,
         )
 
+    cluster_tiles_component = None
+    if enable_cluster_tiles:
+        cluster_tiles_cmd = (
+            "python cluster_analyzer.py "
+            "${{inputs.annotations_json}}/combined_results.json "
+            "--tiles_dir ${{inputs.prepped_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--confidence_threshold {cluster_analyzer_confidence_threshold} "
+            f"{'--max_items ' + str(cluster_analyzer_max_items) + ' ' if cluster_analyzer_max_items is not None else ''}"
+        )
+        cluster_tiles_component = command(
+            name="ClusterTileExtraction",
+            display_name="Extract Representative Tiles by Cluster",
+            inputs={
+                "annotations_json": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=cluster_tiles_output_uri)},
+            code="./",
+            command=cluster_tiles_cmd.strip(),
+            environment=env,
+        )
+
+    filtered_annotation_component = None
+    if enable_filtered_annotations and enable_cluster_tiles:
+        filtered_annotation_cmd = (
+            "python annotate_local_images.py "
+            "--json_file ${{inputs.cluster_tiles_path}}/filtered_annotations.json "
+            "--images_dir ${{inputs.cluster_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--max_labels {filtered_annotation_max_labels} "
+            f"{'--random_labels ' if filtered_annotation_random_labels else ''}"
+            f"{'--draw_bbox ' if filtered_annotation_draw_bbox else ''}"
+            f"{'--draw_polygon ' if filtered_annotation_draw_polygon else ''}"
+            f"{'--no_text ' if filtered_annotation_no_text else ''}"
+            f"{'--text_use_pred_class ' if filtered_annotation_text_use_pred_class else ''}"
+            f"{'--text_use_cluster_id ' if filtered_annotation_text_use_cluster_id else ''}"
+            f"{'--text_use_cluster_confidence ' if filtered_annotation_text_use_cluster_confidence else ''}"
+            f"--text_scale {filtered_annotation_text_scale} "
+            f"--color_by {filtered_annotation_color_by} "
+            f"{'--filter_unclassified ' if filtered_annotation_filter_unclassified else ''}"
+        )
+        filtered_annotation_component = command(
+            name="FilteredAnnotation",
+            display_name="Filtered Cluster Tile Annotation",
+            inputs={
+                "cluster_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=filtered_annotation_output_uri)},
+            code="./",
+            command=filtered_annotation_cmd.strip(),
+            environment=env,
+        )
+
     components = {
         "data_prep"   : data_prep_component,
         "segment"     : segment_component,
@@ -310,6 +390,12 @@ def build_components(
     if annotation_component:
         components["annotation"] = annotation_component
     
+    if cluster_tiles_component:
+        components["cluster_tiles"] = cluster_tiles_component
+    
+    if filtered_annotation_component:
+        components["filtered_annotation"] = filtered_annotation_component
+    
     return components
 
 # --------------------------------------------------------------------------- #
@@ -319,7 +405,7 @@ def run_pipeline():
     # ---------------- CLI ---------------- #
     p = argparse.ArgumentParser("Launch Azure ML histology pipeline")
     p.add_argument("--mode", choices=[
-        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only"
+        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only", "extract_cluster_tiles_only"
     ], default="full")
 
     # Input URIs
@@ -394,6 +480,41 @@ def run_pipeline():
     p.add_argument("--annotation_filter_unclassified", action="store_true", default=True,
                    help="Filter out unclassified cells")
 
+    # Cluster analyzer parameters
+    p.add_argument("--enable_cluster_tiles", action="store_true",
+                   help="Enable extraction of representative tiles for each cluster")
+    p.add_argument("--cluster_analyzer_confidence_threshold", type=float, default=0.75,
+                   help="Minimum cluster confidence for tile extraction [0.75]")
+    p.add_argument("--cluster_analyzer_max_items", type=int, default=20,
+                   help="Maximum number of representative tiles per cluster [20]")
+    
+    # Filtered annotation parameters
+    p.add_argument("--enable_filtered_annotations", action="store_true",
+                   help="Enable annotation of filtered cluster tiles")
+    p.add_argument("--filtered_annotation_max_labels", type=int, default=100,
+                   help="Maximum number of labels to draw per filtered image")
+    p.add_argument("--filtered_annotation_random_labels", action="store_true",
+                   help="Pick labels randomly up to max_labels for filtered annotations")
+    p.add_argument("--filtered_annotation_draw_bbox", action="store_true",
+                   help="Draw bounding boxes for filtered annotations")
+    p.add_argument("--filtered_annotation_draw_polygon", action="store_true", default=True,
+                   help="Draw polygons for filtered annotations")
+    p.add_argument("--filtered_annotation_no_text", action="store_true", default=True,
+                   help="Do not draw text labels for filtered annotations")
+    p.add_argument("--filtered_annotation_text_use_pred_class", action="store_true",
+                   help="Include predicted class in text labels for filtered annotations")
+    p.add_argument("--filtered_annotation_text_use_cluster_id", action="store_true",
+                   help="Include cluster ID in text labels for filtered annotations")
+    p.add_argument("--filtered_annotation_text_use_cluster_confidence", action="store_true",
+                   help="Include cluster confidence in text labels for filtered annotations")
+    p.add_argument("--filtered_annotation_text_scale", type=float, default=0.5,
+                   help="Scale factor for text size for filtered annotations")
+    p.add_argument("--filtered_annotation_color_by", default="cluster_id",
+                   choices=["pred_class", "cluster_id", "none"],
+                   help="Attribute to use for color-coding shapes for filtered annotations")
+    p.add_argument("--filtered_annotation_filter_unclassified", action="store_true", default=True,
+                   help="Filter out unclassified cells for filtered annotations")
+
     args = p.parse_args()
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
@@ -409,6 +530,8 @@ def run_pipeline():
     cls_uri       = f"{base_uri}/classify/"
     post_uri      = f"{base_uri}/postprocess/"
     annotation_uri = f"{base_uri}/annotations/" if args.enable_annotations else None
+    cluster_tiles_uri = f"{base_uri}/cluster_tiles/" if args.enable_cluster_tiles else None
+    filtered_annotation_uri = f"{base_uri}/filtered_annotations/" if args.enable_filtered_annotations else None
 
     # ------------- Azure ML client / env ------------- #
     try:
@@ -438,6 +561,8 @@ def run_pipeline():
         classify_output_uri=cls_uri,
         postprocess_output_uri=post_uri,
         annotation_output_uri=annotation_uri,
+        cluster_tiles_output_uri=cluster_tiles_uri,
+        filtered_annotation_output_uri=filtered_annotation_uri,
         prepped_tiles_uri=filter_uri if args.filter_tiles else dp_uri,
         classify_per_cluster=args.classify_per_cluster,
         param_string=param_string,
@@ -478,7 +603,25 @@ def run_pipeline():
         annotation_text_use_cluster_confidence=args.annotation_text_use_cluster_confidence,
         annotation_text_scale=args.annotation_text_scale,
         annotation_color_by=args.annotation_color_by,
-        annotation_filter_unclassified=args.annotation_filter_unclassified,    )
+        annotation_filter_unclassified=args.annotation_filter_unclassified,
+        # Cluster analyzer parameters
+        enable_cluster_tiles=args.enable_cluster_tiles,
+        cluster_analyzer_confidence_threshold=args.cluster_analyzer_confidence_threshold,
+        cluster_analyzer_max_items=args.cluster_analyzer_max_items,
+        # Filtered annotation parameters
+        enable_filtered_annotations=args.enable_filtered_annotations,
+        filtered_annotation_max_labels=args.filtered_annotation_max_labels,
+        filtered_annotation_random_labels=args.filtered_annotation_random_labels,
+        filtered_annotation_draw_bbox=args.filtered_annotation_draw_bbox,
+        filtered_annotation_draw_polygon=args.filtered_annotation_draw_polygon,
+        filtered_annotation_no_text=args.filtered_annotation_no_text,
+        filtered_annotation_text_use_pred_class=args.filtered_annotation_text_use_pred_class,
+        filtered_annotation_text_use_cluster_id=args.filtered_annotation_text_use_cluster_id,
+        filtered_annotation_text_use_cluster_confidence=args.filtered_annotation_text_use_cluster_confidence,
+        filtered_annotation_text_scale=args.filtered_annotation_text_scale,
+        filtered_annotation_color_by=args.filtered_annotation_color_by,
+        filtered_annotation_filter_unclassified=args.filtered_annotation_filter_unclassified,
+    )
     
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
     def full_pipeline(raw_slides_input):
@@ -508,6 +651,15 @@ def run_pipeline():
                                               prepped_tiles_path=tiles_for_clustering)
             outputs["annotations"] = annotate.outputs.output_path
         
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
+                                                       prepped_tiles_path=tiles_for_clustering)
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        
         return outputs
 
     @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only")
@@ -535,6 +687,15 @@ def run_pipeline():
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
+                                                       prepped_tiles_path=prepped_in)
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        
         return outputs
     @pipeline(compute=COMPUTE_CLUSTER, description="Clu→Cls→Post")
     def cluster_cls_pipeline(prepped_in, segmented_in):
@@ -553,6 +714,15 @@ def run_pipeline():
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
+                                                       prepped_tiles_path=prepped_in)
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        
         return outputs
     @pipeline(compute=COMPUTE_CLUSTER, description="Cls→Post")
     def classify_only_pipeline(prepped_in, segmented_in, cluster_in):
@@ -569,6 +739,15 @@ def run_pipeline():
                                               prepped_tiles_path=prepped_in)
             outputs["annotations"] = annotate.outputs.output_path
         
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
+                                                       prepped_tiles_path=prepped_in)
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        
         return outputs
     @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing results")
     def annotate_only_pipeline(postprocess_in, prepped_in):
@@ -578,6 +757,14 @@ def run_pipeline():
             return {"annotations": annotate.outputs.output_path}
         else:
             return {"message": "Annotations not enabled"}
+    @pipeline(compute=COMPUTE_CLUSTER, description="Extract representative tiles from existing results")
+    def cluster_tiles_only_pipeline(postprocess_in, prepped_in):
+        if "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=postprocess_in,
+                                                       prepped_tiles_path=prepped_in)
+            return {"cluster_tiles": cluster_tiles.outputs.output_path}
+        else:
+            return {"message": "Representative tile extraction not enabled"}
 
     # ------------- Pick + submit ------------- #
     mode = args.mode
@@ -605,6 +792,14 @@ def run_pipeline():
             logging.error("annotate_only mode requires --enable_annotations flag")
             return
         job = annotate_only_pipeline(
+            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
+            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
+        )
+    elif mode == "extract_cluster_tiles_only":
+        if not args.enable_cluster_tiles:
+            logging.error("extract_cluster_tiles_only mode requires --enable_cluster_tiles flag")
+            return
+        job = cluster_tiles_only_pipeline(
             postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
             prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
         )

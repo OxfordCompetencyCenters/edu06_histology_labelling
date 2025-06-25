@@ -134,6 +134,7 @@ def main():
     classification_results = json.loads(cls_file.read_text())
 
     final_ann = []
+    cell_id_counter = 1  # Global counter for unique cell IDs
 
     for tile in classification_results:
         tile_path = tile["tile_path"]
@@ -162,6 +163,7 @@ def main():
                 logging.debug("No class for lbl=%d in %s", lbl_id, tile_name)
                 continue
             cell_records.append({
+                "cell_id": cell_id_counter,
                 "label_id": lbl_id,
                 "polygon": poly["polygon"],
                 "pred_class": cls_cell["pred_class"],
@@ -169,6 +171,7 @@ def main():
                 "cluster_confidence": cls_cell.get("cluster_confidence"),
                 "bbox": cls_cell["bbox"],
             })
+            cell_id_counter += 1  # Increment counter for next cell
 
         final_ann.append({
             "tile_path": tile_path,
