@@ -3,8 +3,43 @@ import json
 import argparse
 import os
 import shutil
+import glob
 from collections import defaultdict
 from pathlib import Path
+
+def find_annotation_json(json_path):
+    """
+    Find the annotation JSON file from either a direct file path or a directory.
+    
+    Args:
+        json_path: Path to a JSON file or directory containing JSON files
+        
+    Returns:
+        Path to the annotation JSON file
+    """
+    if os.path.isfile(json_path):
+        return json_path
+    
+    if os.path.isdir(json_path):
+        # Look for common annotation file patterns
+        patterns = [
+            "*.json",
+            "*annotations.json",
+            "*_annotations.json",
+            "final_annotations.json",
+            "v1_*_annotations.json"
+        ]
+        
+        for pattern in patterns:
+            matches = glob.glob(os.path.join(json_path, pattern))
+            if matches:
+                # Return the first match, preferring files with "annotation" in the name
+                annotation_files = [f for f in matches if "annotation" in os.path.basename(f).lower()]
+                if annotation_files:
+                    return annotation_files[0]
+                return matches[0]
+    
+    raise FileNotFoundError(f"No JSON annotation file found at {json_path}")
 
 def analyze_cluster_and_tiles(
     json_file_path,
@@ -131,8 +166,14 @@ def main():
     )
 
     parser.add_argument(
-        "json_file",
+        "--json_file",
+        type=str,
         help="Path to the input JSON file containing tile, cell, and cluster data. Each cell must have a unique 'cell_id'."
+    )
+    parser.add_argument(
+        "--json_dir",
+        type=str,
+        help="Directory containing the input JSON file with tile, cell, and cluster data."
     )
     parser.add_argument(
         "--tiles_dir",
@@ -161,9 +202,22 @@ def main():
 
     args = parser.parse_args()
 
+    # Determine JSON file path
+    if args.json_file and args.json_dir:
+        print("Error: Specify either --json_file or --json_dir, not both.")
+        return
+    elif args.json_file:
+        json_path = args.json_file
+    elif args.json_dir:
+        json_path = find_annotation_json(args.json_dir)
+        print(f"Found annotation file: {json_path}")
+    else:
+        print("Error: Must specify either --json_file or --json_dir.")
+        return
+
     print("Analyzing clusters and filtering data...")
     filtered_data = analyze_cluster_and_tiles(
-        args.json_file,
+        json_path,
         args.output_dir,
         args.confidence_threshold,
         args.max_items

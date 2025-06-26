@@ -326,7 +326,7 @@ def build_components(
     if enable_cluster_tiles:
         cluster_tiles_cmd = (
             "python cluster_analyzer.py "
-            "${{inputs.annotations_json}}/combined_results.json "
+            "--json_dir ${{inputs.annotations_json}} "
             "--tiles_dir ${{inputs.prepped_tiles_path}} "
             "--output_dir ${{outputs.output_path}} "
             f"--confidence_threshold {cluster_analyzer_confidence_threshold} "
@@ -350,7 +350,7 @@ def build_components(
         filtered_annotation_cmd = (
             "python annotate_local_images.py "
             "--json_file ${{inputs.cluster_tiles_path}}/filtered_annotations.json "
-            "--images_dir ${{inputs.cluster_tiles_path}} "
+            "--images_dir ${{inputs.prepped_tiles_path}} "
             "--output_dir ${{outputs.output_path}} "
             f"--max_labels {filtered_annotation_max_labels} "
             f"{'--random_labels ' if filtered_annotation_random_labels else ''}"
@@ -369,6 +369,7 @@ def build_components(
             display_name="Filtered Cluster Tile Annotation",
             inputs={
                 "cluster_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
             },
             outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=filtered_annotation_output_uri)},
             code="./",
@@ -657,7 +658,8 @@ def run_pipeline():
             outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
             
             if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
+                                                                     prepped_tiles_path=tiles_for_clustering)
                 outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
         
         return outputs
@@ -693,7 +695,8 @@ def run_pipeline():
             outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
             
             if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
+                                                                     prepped_tiles_path=prepped_in)
                 outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
         
         return outputs
@@ -720,7 +723,8 @@ def run_pipeline():
             outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
             
             if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
+                                                                     prepped_tiles_path=prepped_in)
                 outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
         
         return outputs
@@ -745,7 +749,8 @@ def run_pipeline():
             outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
             
             if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path)
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
+                                                                     prepped_tiles_path=prepped_in)
                 outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
         
         return outputs
