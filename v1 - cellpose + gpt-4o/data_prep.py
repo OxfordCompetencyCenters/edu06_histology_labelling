@@ -12,8 +12,8 @@ from tqdm import tqdm
 
 def parse_magnifications(mag_str: str) -> List[float]:
     factors = sorted({float(s) for s in mag_str.split(",") if s.strip()}, reverse=True)
-    if not factors or any(not 0.0 < f <= 1.0 for f in factors):
-        raise argparse.ArgumentTypeError("Magnifications must be floats in (0,1].")
+    if not factors or any(f <= 0.0 for f in factors):
+        raise argparse.ArgumentTypeError("Magnifications must be positive floats > 0.")
     return factors
 
 
@@ -78,10 +78,18 @@ def tile_slide(
     tile_idx = 0  # Global tile counter for unique IDs
 
     for mag in magnifications:
-        src_edge = int(round(tile_size / mag))
-        if base_w < src_edge or base_h < src_edge:
-            logging.info("   skipping mag %.3f: slide < 512 px at this scale", mag)
-            break
+        if mag <= 1.0:
+            # Original logic for magnifications <= 1.0 (downsampling)
+            src_edge = int(round(tile_size / mag))
+            if base_w < src_edge or base_h < src_edge:
+                logging.info("   skipping mag %.3f: slide < %d px at this scale", mag, src_edge)
+                continue
+        else:
+            # For magnifications > 1.0 (upsampling), we extract at tile_size and enlarge
+            src_edge = tile_size
+            if base_w < src_edge or base_h < src_edge:
+                logging.info("   skipping mag %.3f: slide < %d px", mag, src_edge)
+                continue
 
         tiles_x = (base_w - src_edge) // src_edge + 1
         tiles_y = (base_h - src_edge) // src_edge + 1
@@ -95,8 +103,19 @@ def tile_slide(
                   leave=False) as pbar:
             for x, y in iter_grid_positions(base_w, base_h, src_edge, stride):
                 region = slide.read_region((x, y), 0, (src_edge, src_edge)).convert("RGB")
-                if src_edge != tile_size:
-                    region = region.resize((tile_size, tile_size), Image.LANCZOS)
+                
+                if mag <= 1.0:
+                    # Downsampling: resize extracted region to tile_size
+                    if src_edge != tile_size:
+                        region = region.resize((tile_size, tile_size), Image.LANCZOS)
+                else:
+                    # Upsampling: enlarge the tile_size region by the magnification factor
+                    enlarged_size = int(tile_size * mag)
+                    region = region.resize((enlarged_size, enlarged_size), Image.LANCZOS)
+                    # Then crop back to tile_size from the center to maintain aspect ratio
+                    left = (enlarged_size - tile_size) // 2
+                    top = (enlarged_size - tile_size) // 2
+                    region = region.crop((left, top, left + tile_size, top + tile_size))
 
                 out_name = create_tile_filename(slide_id, mag, x, y, tile_idx)
                 region.save(out_dir / out_name)
@@ -127,7 +146,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--tile_size", type=int, default=512,
                    help="Output tile edge (default 512).")
     p.add_argument("--magnifications", type=parse_magnifications, default="1.0",
-                   help="Comma-separated factors, e.g. '1.0,0.9,0.8'.")
+                   help="Comma-separated factors, e.g. '1.0,0.9,0.8' (≤1.0 for downsampling) or '1.0,1.2,1.5' (>1.0 for upsampling).")
     p.add_argument("--num_tiles", type=int, default=None,
                    help="Target #tiles per magnification (grid is thinned).")
     return p

@@ -227,14 +227,6 @@ def annotate_images(json_file, images_dir, output_dir,
                 continue # Nothing to draw for this cell
 
             # If text is enabled, we need a bbox for positioning.
-            # If text is desired but only polygon exists, we might skip or use polygon centroid (more complex)
-            # For simplicity, require bbox if text is enabled (unless no_text is True)
-            if not no_text and not bbox and \
-               (text_use_pred_class or text_use_cluster_id or text_use_cluster_confidence):
-                print(f"Warning: Skipping cell in {subpath} - Text requested but bbox missing for positioning.")
-                continue
-
-
             # Determine the color based on the chosen attribute
             color_value = "default" # Default if coloring is off or attribute missing
             if color_by == "pred_class":
@@ -260,7 +252,7 @@ def annotate_images(json_file, images_dir, output_dir,
                 drawn_shape = True
 
             # --- Text Labeling (conditional) ---
-            if not no_text and drawn_shape and bbox: # Only add text if enabled, a shape was drawn, and bbox exists
+            if not no_text and drawn_shape: # Only add text if enabled and a shape was drawn
                 label_parts = []
                 if text_use_pred_class:
                     label_parts.append(f"c:{pred_class}")
@@ -272,11 +264,21 @@ def annotate_images(json_file, images_dir, output_dir,
                     except (ValueError, TypeError):
                          label_parts.append(f"p:?") # Handle non-numeric confidence
 
-
                 if label_parts: # Only proceed if there's something to write
                     label_str = ", ".join(label_parts)
-                    x_min, y_min, _, _ = map(int, bbox)
-                    text_pos = (max(0, x_min), max(0, y_min - 10)) # Position above top-left
+                    
+                    # Determine text position - prefer bbox, fallback to polygon centroid
+                    if bbox:
+                        x_min, y_min, _, _ = map(int, bbox)
+                        text_pos = (max(0, x_min), max(0, y_min - 10)) # Position above top-left
+                    elif polygon:
+                        # Calculate polygon centroid for text positioning
+                        polygon_array = np.array(polygon)
+                        centroid_x = int(np.mean(polygon_array[:, 0]))
+                        centroid_y = int(np.mean(polygon_array[:, 1]))
+                        text_pos = (max(0, centroid_x), max(0, centroid_y - 10))
+                    else:
+                        continue # Skip if no positioning reference available
 
                     # Add background rectangle for better readability
                     (text_width, text_height), baseline = cv2.getTextSize(label_str, cv2.FONT_HERSHEY_SIMPLEX, text_scale, 1)

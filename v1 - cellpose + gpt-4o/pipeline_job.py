@@ -463,7 +463,7 @@ def run_pipeline():
 
     # Data-prep params
     p.add_argument("--magnifications", type=str, default="1.0",
-                   help="Comma-separated list of relative magnifications, e.g. '1.0,0.9,0.8'")
+                   help="Comma-separated list of magnifications, e.g. '1.0,0.9,0.8' (≤1.0 for downsampling) or '1.0,1.2,1.5' (>1.0 for upsampling)")
     p.add_argument("--num_tiles", type=int, default=None,
                    help="Approx. number of tiles per magnification (uniform thinning)")
     p.add_argument("--filter_tiles", action="store_true",
@@ -545,7 +545,7 @@ def run_pipeline():
                    help="Draw bounding boxes for filtered annotations")
     p.add_argument("--filtered_annotation_draw_polygon", action="store_true", default=True,
                    help="Draw polygons for filtered annotations")
-    p.add_argument("--filtered_annotation_no_text", action="store_true", default=True,
+    p.add_argument("--filtered_annotation_no_text", action="store_true",
                    help="Do not draw text labels for filtered annotations")
     p.add_argument("--filtered_annotation_text_use_pred_class", action="store_true",
                    help="Include predicted class in text labels for filtered annotations")
