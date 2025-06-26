@@ -33,35 +33,80 @@ def format_param_for_name(value):
 
 def build_param_string(args):
     """Compact signature of key hyper-params for folder/exp names."""
-    parts = [
-        f"prob_{format_param_for_name(args.segment_cellprob_threshold)}",
-        f"flow_{format_param_for_name(args.segment_flow_threshold)}",
-        f"eps_{format_param_for_name(args.cluster_eps)}",
-        f"mins_{args.cluster_min_samples}",
-    ]
-    if args.segment_use_gpu:
-        parts.append("segGPU")
-    if args.cluster_normalize:
-        parts.append("norm")
-    if args.cluster_use_gpu:
-        parts.append("cluGPU")
-    if args.cluster_use_umap:
-        parts.append(f"umap_{args.cluster_umap_components}")
-    parts.append(f"mag_{format_param_for_name(args.magnifications)}")
-    if args.num_tiles is not None:
-        parts.append(f"ntiles_{args.num_tiles}")
-    if args.filter_tiles:
-        parts.append("filtered")
-        parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
-    if hasattr(args, 'enable_annotations') and args.enable_annotations:
-        parts.append("annotated")
-    if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
-        parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
-        if args.cluster_analyzer_max_items is not None:
-            parts.append(f"maxper_{args.cluster_analyzer_max_items}")
-    if hasattr(args, 'enable_filtered_annotations') and args.enable_filtered_annotations:
-        parts.append("filteredAnnotated")
-    return "_".join(parts)
+    mode = getattr(args, 'mode', 'full')
+    parts = []
+    
+    # For cluster tiles and filtered annotations only modes
+    if mode in ["extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"]:
+        if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
+            parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
+            if args.cluster_analyzer_max_items is not None:
+                parts.append(f"maxper_{args.cluster_analyzer_max_items}")
+        if hasattr(args, 'enable_filtered_annotations') and args.enable_filtered_annotations:
+            parts.append("filteredAnnotated")
+            parts.append(f"maxlabels_{args.filtered_annotation_max_labels}")
+            if args.filtered_annotation_random_labels:
+                parts.append("random")
+            if args.filtered_annotation_draw_bbox:
+                parts.append("bbox")
+            if args.filtered_annotation_draw_polygon:
+                parts.append("poly")
+            if args.filtered_annotation_no_text:
+                parts.append("notext")
+            parts.append(f"colorby_{args.filtered_annotation_color_by}")
+            if args.filtered_annotation_filter_unclassified:
+                parts.append("filterunclass")
+        return "_".join(parts) if parts else "default"
+    
+    # For annotation only mode
+    elif mode == "annotate_only":
+        if hasattr(args, 'enable_annotations') and args.enable_annotations:
+            parts.append("annotated")
+            parts.append(f"maxlabels_{args.annotation_max_labels}")
+            if args.annotation_random_labels:
+                parts.append("random")
+            if args.annotation_draw_bbox:
+                parts.append("bbox")
+            if args.annotation_draw_polygon:
+                parts.append("poly")
+            if args.annotation_no_text:
+                parts.append("notext")
+            parts.append(f"colorby_{args.annotation_color_by}")
+            if args.annotation_filter_unclassified:
+                parts.append("filterunclass")
+        return "_".join(parts) if parts else "default"
+    
+    # For all other modes (full pipeline parameters)
+    else:
+        parts = [
+            f"prob_{format_param_for_name(args.segment_cellprob_threshold)}",
+            f"flow_{format_param_for_name(args.segment_flow_threshold)}",
+            f"eps_{format_param_for_name(args.cluster_eps)}",
+            f"mins_{args.cluster_min_samples}",
+        ]
+        if args.segment_use_gpu:
+            parts.append("segGPU")
+        if args.cluster_normalize:
+            parts.append("norm")
+        if args.cluster_use_gpu:
+            parts.append("cluGPU")
+        if args.cluster_use_umap:
+            parts.append(f"umap_{args.cluster_umap_components}")
+        parts.append(f"mag_{format_param_for_name(args.magnifications)}")
+        if args.num_tiles is not None:
+            parts.append(f"ntiles_{args.num_tiles}")
+        if args.filter_tiles:
+            parts.append("filtered")
+            parts.append(f"edge_{format_param_for_name(args.filter_min_edge_density)}")
+        if hasattr(args, 'enable_annotations') and args.enable_annotations:
+            parts.append("annotated")
+        if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
+            parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
+            if args.cluster_analyzer_max_items is not None:
+                parts.append(f"maxper_{args.cluster_analyzer_max_items}")
+        if hasattr(args, 'enable_filtered_annotations') and args.enable_filtered_annotations:
+            parts.append("filteredAnnotated")
+        return "_".join(parts)
 
 def build_cluster_command(**kwargs) -> str:
     """Return the shell command for cluster.py with only the flags we need."""
@@ -406,7 +451,7 @@ def run_pipeline():
     # ---------------- CLI ---------------- #
     p = argparse.ArgumentParser("Launch Azure ML histology pipeline")
     p.add_argument("--mode", choices=[
-        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only", "extract_cluster_tiles_only"
+        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only", "extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"
     ], default="full")
 
     # Input URIs
@@ -771,6 +816,26 @@ def run_pipeline():
         else:
             return {"message": "Representative tile extraction not enabled"}
 
+    @pipeline(compute=COMPUTE_CLUSTER, description="Extract representative tiles and create filtered annotations")
+    def cluster_tiles_and_filtered_annotations_pipeline(postprocess_in, prepped_in):
+        outputs = {}
+        
+        if "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](annotations_json=postprocess_in,
+                                                       prepped_tiles_path=prepped_in)
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
+                                                                     prepped_tiles_path=prepped_in)
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+            else:
+                outputs["message"] = "Filtered annotations not enabled"
+        else:
+            outputs["message"] = "Representative tile extraction not enabled"
+        
+        return outputs
+
     # ------------- Pick + submit ------------- #
     mode = args.mode
     logging.info("Submitting mode: %s", mode)
@@ -805,6 +870,17 @@ def run_pipeline():
             logging.error("extract_cluster_tiles_only mode requires --enable_cluster_tiles flag")
             return
         job = cluster_tiles_only_pipeline(
+            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
+            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
+        )
+    elif mode == "cluster_tiles_and_filtered_annotations":
+        if not args.enable_cluster_tiles:
+            logging.error("cluster_tiles_and_filtered_annotations mode requires --enable_cluster_tiles flag")
+            return
+        if not args.enable_filtered_annotations:
+            logging.error("cluster_tiles_and_filtered_annotations mode requires --enable_filtered_annotations flag")
+            return
+        job = cluster_tiles_and_filtered_annotations_pipeline(
             postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
             prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
         )
