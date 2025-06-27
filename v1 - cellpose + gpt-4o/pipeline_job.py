@@ -79,13 +79,24 @@ def build_param_string(args):
     # For all other modes (full pipeline parameters)
     else:
         parts = [
+            f"model_{format_param_for_name(args.segment_model_type)}",
             f"prob_{format_param_for_name(args.segment_cellprob_threshold)}",
             f"flow_{format_param_for_name(args.segment_flow_threshold)}",
             f"eps_{format_param_for_name(args.cluster_eps)}",
             f"mins_{args.cluster_min_samples}",
         ]
+        if args.segment_use_cellpose_sam:
+            parts.append("cellpose_sam")
         if args.segment_use_gpu:
             parts.append("segGPU")
+        if args.segment_diameter is not None:
+            parts.append(f"diam_{format_param_for_name(args.segment_diameter)}")
+        if args.segment_resample:
+            parts.append("resample")
+        if not args.segment_normalize:
+            parts.append("nonorm")
+        if args.segment_do_3D:
+            parts.append("3D")
         if args.cluster_normalize:
             parts.append("norm")
         if args.cluster_use_gpu:
@@ -160,9 +171,17 @@ def build_components(
     filter_min_std_intensity: float,
     filter_min_laplacian_var: float,
     filter_min_color_variance: float,
+    segment_model_type: str,
     segment_flow_threshold: float,
     segment_cellprob_threshold: float,
     segment_use_gpu: bool,
+    segment_diameter: float | None,
+    segment_resample: bool,
+    segment_normalize: bool,
+    segment_do_3D: bool,
+    segment_stitch_threshold: float,
+    segment_channels: str,
+    segment_use_cellpose_sam: bool,
     cluster_eps: float | None,
     cluster_min_samples: int,
     cluster_use_gpu: bool,
@@ -212,7 +231,8 @@ def build_components(
         "--output_path ${{outputs.output_path}} "
         f"--tile_size 512 "
         f"--magnifications \"{magnifications}\" "
-        f"{'--num_tiles ' + str(num_tiles) if num_tiles is not None else ''}"
+        f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
+        "--replace_percent_in_names"
     )
     data_prep_component = command(
         name="DataPrep",
@@ -248,14 +268,23 @@ def build_components(
             environment=env,
         )
 
+    # Determine model type (cellpose-sam takes precedence)
+    model_type = "cellpose_sam" if segment_use_cellpose_sam else segment_model_type
+    
     seg_cmd = (
         "python segment.py "
         "--input_path ${{inputs.prepped_tiles_path}} "
         "--output_path ${{outputs.output_path}} "
-        "--model_type cyto2 --chan 2 --chan2 1 "
+        f"--model_type {model_type} "
+        f"--channels {segment_channels} "
         f"--flow_threshold {segment_flow_threshold} "
         f"--cellprob_threshold {segment_cellprob_threshold} "
-        f"{'--segment_use_gpu' if segment_use_gpu else ''}"
+        f"{'--segment_use_gpu ' if segment_use_gpu else ''}"
+        f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
+        f"{'--resample ' if segment_resample else ''}"
+        f"{'--normalize ' if segment_normalize else '--no_normalize '}"
+        f"{'--do_3D ' if segment_do_3D else ''}"
+        f"--stitch_threshold {segment_stitch_threshold} "
     )
     segment_component = command(
         name="Segmentation",
@@ -485,9 +514,27 @@ def run_pipeline():
     p.add_argument("--classify_per_cluster", type=int, default=10)
 
     # Segmentation
+    p.add_argument("--segment_model_type", type=str, default="cellpose_sam",
+                   choices=["cyto", "cyto2", "cyto3", "nuclei", "tissuenet", "livecell", "yeast_PhC", "yeast_BF", 
+                           "bact_phase", "bact_fluor", "deepbact", "cyto2_cp3", "cyto2_omni", "cellpose_sam"],
+                   help="Cellpose model type [cellpose_sam]. Uses latest SAM-based model with superhuman generalization by default")
     p.add_argument("--segment_flow_threshold", type=float, default=0.4)
     p.add_argument("--segment_cellprob_threshold", type=float, default=0.0)
     p.add_argument("--segment_use_gpu", action="store_true")
+    p.add_argument("--segment_diameter", type=float, default=None,
+                   help="Expected cell diameter in pixels. If None, cellpose will estimate automatically")
+    p.add_argument("--segment_resample", action="store_true",
+                   help="Enable resampling for better segmentation of variable-sized objects")
+    p.add_argument("--segment_normalize", action="store_true", default=True,
+                   help="Normalize images before segmentation (recommended for most cases)")
+    p.add_argument("--segment_do_3D", action="store_true",
+                   help="Enable 3D segmentation (for Z-stacks)")
+    p.add_argument("--segment_stitch_threshold", type=float, default=0.0,
+                   help="Threshold for stitching masks across tiles (0.0 = no stitching)")
+    p.add_argument("--segment_channels", type=str, default="2,1",
+                   help="Comma-separated channel specification: 'cytoplasm_channel,nucleus_channel' (e.g., '2,1' or '0,0' for grayscale)")
+    p.add_argument("--segment_use_cellpose_sam", action="store_true",
+                   help="Use Cellpose-SAM for enhanced generalization (automatically sets model to cellpose_sam)")
 
     # Clustering
     p.add_argument("--cluster_eps", type=float, default=None)
@@ -568,7 +615,7 @@ def run_pipeline():
     # ------------- Paths & names ------------- #
     timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     param_string  = build_param_string(args)
-    base_uri      = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v1_{param_string}"
+    base_uri      = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v4_{param_string}"
     dp_uri        = f"{base_uri}/data_prep/"
     filter_uri    = f"{base_uri}/tile_filter/" if args.filter_tiles else None
     seg_uri       = f"{base_uri}/segment/"
@@ -592,7 +639,7 @@ def run_pipeline():
         sys.exit(1)
 
     env = Environment(
-        name="edu06_env_revised",
+        name="edu06_env_cellpose4",
         conda_file="environment.yml",
         image="mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-ubuntu22.04:latest",
     )
@@ -624,9 +671,17 @@ def run_pipeline():
         filter_min_laplacian_var=args.filter_min_laplacian_var,
         filter_min_color_variance=args.filter_min_color_variance,
         # segmentation
+        segment_model_type=args.segment_model_type,
         segment_flow_threshold=args.segment_flow_threshold,
         segment_cellprob_threshold=args.segment_cellprob_threshold,
         segment_use_gpu=args.segment_use_gpu,
+        segment_diameter=args.segment_diameter,
+        segment_resample=args.segment_resample,
+        segment_normalize=args.segment_normalize,
+        segment_do_3D=args.segment_do_3D,
+        segment_stitch_threshold=args.segment_stitch_threshold,
+        segment_channels=args.segment_channels,
+        segment_use_cellpose_sam=args.segment_use_cellpose_sam,
         # clustering
         cluster_eps=args.cluster_eps,
         cluster_min_samples=args.cluster_min_samples,
@@ -839,7 +894,7 @@ def run_pipeline():
     # ------------- Pick + submit ------------- #
     mode = args.mode
     logging.info("Submitting mode: %s", mode)
-    exp_name = f"v1_{mode}_{param_string}_{timestamp}"
+    exp_name = f"v4_{mode}_{param_string}_{timestamp}"
 
     job = None
     if mode == "prep_only":

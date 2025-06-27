@@ -25,5 +25,5 @@ dependencies:
     # Install PyTorch/Torchvision compatible with CUDA 11.8 from PyTorch index
     - torch==2.1.2 --index-url https://download.pytorch.org/whl/cu118
     - torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118
-    - cellpose==3.1.1
+    - cellpose==4.0.5
     - openai

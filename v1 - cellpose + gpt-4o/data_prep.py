@@ -17,9 +17,13 @@ def parse_magnifications(mag_str: str) -> List[float]:
     return factors
 
 
-def generate_slide_id(slide_name: str) -> str:
+def generate_slide_id(slide_name: str, replace_percent: bool = False) -> str:
     """Generate a short, filesystem-safe ID from slide name."""
-    # Clean the slide name first
+    # Replace % with _percentage_ if requested
+    if replace_percent:
+        slide_name = slide_name.replace('%', '_percentage_')
+    
+    # Clean the slide name 
     clean_name = "".join(c for c in slide_name if c.isalnum() or c in " -_")
     # Take first 20 chars and add hash for uniqueness
     short_name = clean_name[:20].strip()
@@ -62,11 +66,12 @@ def tile_slide(
     tile_size: int = 512,
     magnifications: List[float] | None = None,
     num_tiles: int | None = None,
+    replace_percent: bool = False,
 ) -> None:
 
     magnifications = magnifications or [1.0]
     slide_name = slide_path.stem
-    slide_id = generate_slide_id(slide_name)  # Generate filesystem-safe ID
+    slide_id = generate_slide_id(slide_name, replace_percent)  # Generate filesystem-safe ID
     out_dir = out_root / slide_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,6 +154,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Comma-separated factors, e.g. '1.0,0.9,0.8' (≤1.0 for downsampling) or '1.0,1.2,1.5' (>1.0 for upsampling).")
     p.add_argument("--num_tiles", type=int, default=None,
                    help="Target #tiles per magnification (grid is thinned).")
+    p.add_argument("--replace_percent_in_names", action="store_true",
+                   help="Replace '%' characters in slide names with '_percentage_' for filesystem compatibility.")
     return p
 
 
@@ -169,7 +176,7 @@ def main(argv=None) -> None:
     logging.info("Found %d slide(s).", len(wsi_paths))
     for slide_path in tqdm(wsi_paths, desc="Slides", unit="slide"):
         tile_slide(slide_path, out_dir, args.tile_size,
-                   args.magnifications, args.num_tiles)
+                   args.magnifications, args.num_tiles, args.replace_percent_in_names)
 
     logging.info("All done – tiles are in %s", out_dir)
 
