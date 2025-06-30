@@ -18,6 +18,59 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
+def load_cluster_assignments(clustered_cells_path):
+    """
+    Load cluster assignments from either global or per-slide clustering format.
+    
+    Args:
+        clustered_cells_path: Path to cluster output directory
+        
+    Returns:
+        List of cluster assignment entries, or None if no valid assignments found
+    """
+    if not clustered_cells_path or not os.path.exists(clustered_cells_path):
+        return None
+    
+    # Try global clustering format first (single cluster_assignments.json)
+    global_path = os.path.join(clustered_cells_path, "cluster_assignments.json")
+    if os.path.exists(global_path):
+        logging.info(f"Loading global cluster assignments from {global_path}")
+        try:
+            with open(global_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Failed to load global cluster assignments: {e}")
+            return None
+    
+    # Try per-slide clustering format (slide_name/cluster_assignments.json)
+    slide_dirs = [d for d in os.listdir(clustered_cells_path) 
+                  if os.path.isdir(os.path.join(clustered_cells_path, d))]
+    
+    if not slide_dirs:
+        logging.warning(f"No cluster_assignments.json found at {global_path} and no slide directories found in {clustered_cells_path}")
+        return None
+    
+    all_assignments = []
+    slides_found = 0
+    for slide_name in slide_dirs:
+        slide_path = os.path.join(clustered_cells_path, slide_name, "cluster_assignments.json")
+        if os.path.exists(slide_path):
+            try:
+                with open(slide_path, "r") as f:
+                    slide_assignments = json.load(f)
+                all_assignments.extend(slide_assignments)
+                slides_found += 1
+                logging.info(f"Loaded {len(slide_assignments)} cluster assignments from {slide_path}")
+            except Exception as e:
+                logging.error(f"Failed to load cluster assignments from {slide_path}: {e}")
+    
+    if slides_found > 0:
+        logging.info(f"Combined cluster assignments from {slides_found} slides: {len(all_assignments)} total entries")
+        return all_assignments
+    else:
+        logging.warning(f"No cluster_assignments.json files found in any slide directories in {clustered_cells_path}")
+        return None
+
 def parse_slide_name(tile_name):
     """
     Extract slide name from tile filename using new format only.
@@ -152,13 +205,11 @@ def main():
     # ------------------------------------------------------------------
     # (A) If clustered_cells_path is provided, use cluster assignments
     # ------------------------------------------------------------------
-    cluster_assignments_path = os.path.join(args.clustered_cells_path, "cluster_assignments.json")
-    if args.clustered_cells_path and os.path.exists(cluster_assignments_path):
-        logging.info("Using cluster assignments from %s to select bounding boxes.", cluster_assignments_path)
+    all_clustered_cells = load_cluster_assignments(args.clustered_cells_path)
+    if all_clustered_cells:
+        logging.info("Using cluster assignments to select bounding boxes.")
 
-        with open(cluster_assignments_path, "r") as f:
-            # This contains ALL cells from the clustering input
-            all_clustered_cells = json.load(f)
+        # all_clustered_cells already loaded above
         logging.info(f"Loaded {len(all_clustered_cells)} total cell entries from cluster assignments.")
 
         # Group bounding boxes by (cluster_id, slide_name) to select top N

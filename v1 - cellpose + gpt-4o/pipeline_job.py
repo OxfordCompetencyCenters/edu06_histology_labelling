@@ -103,6 +103,8 @@ def build_param_string(args):
             parts.append("cluGPU")
         if args.cluster_use_umap:
             parts.append(f"umap_{args.cluster_umap_components}")
+        if args.cluster_per_slide:
+            parts.append("perslide")
         parts.append(f"mag_{format_param_for_name(args.magnifications)}")
         if args.num_tiles is not None:
             parts.append(f"ntiles_{args.num_tiles}")
@@ -133,6 +135,8 @@ def build_cluster_command(**kwargs) -> str:
         cmd += "--gpu "
     if kwargs["cluster_normalize"]:
         cmd += "--normalize_embeddings "
+    if kwargs.get("cluster_per_slide", False):
+        cmd += "--per_slide "
     if kwargs["cluster_use_umap"]:
         cmd += (
             "--use_umap "
@@ -141,6 +145,10 @@ def build_cluster_command(**kwargs) -> str:
             f"--umap_min_dist {kwargs['cluster_umap_min_dist']} "
             f"--umap_metric {kwargs['cluster_umap_metric']} "
         )
+    # Add slide_folders support
+    if kwargs.get("cluster_slide_folders"):
+        slide_folders_str = " ".join(f'"{folder}"' for folder in kwargs["cluster_slide_folders"])
+        cmd += f"--slide_folders {slide_folders_str} "
     logging.info("Cluster cmd: %s", cmd)
     return cmd.strip()
 
@@ -191,6 +199,8 @@ def build_components(
     cluster_umap_neighbors: int,
     cluster_umap_min_dist: float,
     cluster_umap_metric: str,
+    cluster_per_slide: bool,
+    cluster_slide_folders: list | None,
     # Annotation parameters
     enable_annotations: bool,
     annotation_max_labels: int,
@@ -315,6 +325,8 @@ def build_components(
             cluster_umap_neighbors=cluster_umap_neighbors,
             cluster_umap_min_dist=cluster_umap_min_dist,
             cluster_umap_metric=cluster_umap_metric,
+            cluster_per_slide=cluster_per_slide,
+            cluster_slide_folders=cluster_slide_folders,
         ),
         environment=env,
     )
@@ -367,7 +379,7 @@ def build_components(
     annotation_component = None
     if enable_annotations:
         annotation_cmd = (
-            "python annotate_local_images.py "
+            "python annotate_images.py "
             "--json_dir ${{inputs.annotations_json}} "
             "--images_dir ${{inputs.prepped_tiles_path}} "
             "--output_dir ${{outputs.output_path}} "
@@ -422,7 +434,7 @@ def build_components(
     filtered_annotation_component = None
     if enable_filtered_annotations and enable_cluster_tiles:
         filtered_annotation_cmd = (
-            "python annotate_local_images.py "
+            "python annotate_images.py "
             "--json_file ${{inputs.cluster_tiles_path}}/filtered_annotations.json "
             "--images_dir ${{inputs.prepped_tiles_path}} "
             "--output_dir ${{outputs.output_path}} "
@@ -546,6 +558,10 @@ def run_pipeline():
     p.add_argument("--cluster_umap_neighbors", type=int, default=15)
     p.add_argument("--cluster_umap_min_dist", type=float, default=0.1)
     p.add_argument("--cluster_umap_metric", default="euclidean")
+    p.add_argument("--cluster_per_slide", action="store_true",
+                   help="Perform clustering separately for each slide instead of globally")
+    p.add_argument("--cluster_slide_folders", type=str, nargs='*',
+                   help="Specific slide folder names to process when using --cluster_per_slide. If not provided, processes all folders.")
     
     p.add_argument("--enable_annotations", action="store_true",
                    help="Enable image annotation generation")
@@ -692,6 +708,8 @@ def run_pipeline():
         cluster_umap_neighbors=args.cluster_umap_neighbors,
         cluster_umap_min_dist=args.cluster_umap_min_dist,
         cluster_umap_metric=args.cluster_umap_metric,
+        cluster_per_slide=args.cluster_per_slide,
+        cluster_slide_folders=args.cluster_slide_folders,
         # Annotation parameters
         enable_annotations=args.enable_annotations,
         annotation_max_labels=args.annotation_max_labels,

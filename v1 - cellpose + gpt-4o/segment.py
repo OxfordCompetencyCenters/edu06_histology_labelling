@@ -29,7 +29,7 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels, flow_threshol
     logging.info(f"Segmenting tile: {img_path} with flow_threshold={flow_threshold}, cellprob_threshold={cellprob_threshold}")
 
     # 1) Run segmentation with enhanced cellpose 4.0.5 parameters
-    masks, flows, styles, diams = model.eval(
+    masks, flows, diams = model.eval(
         img, 
         channels=channels,
         flow_threshold=flow_threshold,

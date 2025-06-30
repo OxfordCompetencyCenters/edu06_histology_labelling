@@ -181,6 +181,283 @@ def find_optimal_eps(
         logging.error(f"Error during k-distance calculation or elbow finding: {e}", exc_info=True)
         return None
 
+def get_bbox_file_list(segmentation_path: str, prepped_tiles_path: str) -> List[Tuple[str, str]]:
+    """
+    Get list of (bbox_file, tile_file) pairs for clustering.
+    
+    Returns:
+        List of tuples (bbox_file_path, corresponding_tile_file_path)
+    """
+    bbox_files = glob.glob(os.path.join(segmentation_path, "**/*_bboxes.json"), recursive=True)
+    valid_pairs = []
+    
+    for bbox_file in bbox_files:
+        rel_dir = os.path.relpath(os.path.dirname(bbox_file), segmentation_path)
+        tile_name = os.path.basename(bbox_file).replace("_bboxes.json", ".png")
+        tile_path = os.path.join(prepped_tiles_path, rel_dir, tile_name)
+        
+        if os.path.exists(tile_path):
+            valid_pairs.append((bbox_file, tile_path))
+        else:
+            logging.warning(f"Tile image not found: {tile_path}. Skipping {bbox_file}.")
+    
+    return valid_pairs
+
+def perform_clustering(bbox_tile_pairs: List[Tuple[str, str]], output_path: str, 
+                      model: nn.Module, transform: transforms.Compose, 
+                      device: torch.device, args, name: str = "") -> bool:
+    """
+    Perform clustering on a list of bbox/tile file pairs.
+    
+    Args:
+        bbox_tile_pairs: List of (bbox_file, tile_file) tuples
+        output_path: Directory to write cluster_assignments.json
+        model: ResNet model for embedding extraction
+        transform: Image transforms
+        device: PyTorch device
+        args: Command line arguments
+        name: Name for logging (e.g., slide name or "global")
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if not bbox_tile_pairs:
+        logging.warning(f"No valid bbox/tile pairs found for {name or 'clustering'}. Skipping.")
+        return False
+    
+    logging.info(f"Processing {len(bbox_tile_pairs)} bbox/tile pairs for {name or 'global clustering'}...")
+    os.makedirs(output_path, exist_ok=True)
+    
+    # --- Extract Embeddings ---
+    embeddings = []
+    record_tracker = []  # Stores (bbox_file, label_id, bbox)
+    processed_bbox_count = 0
+    skipped_bbox_count = 0
+    processed_files = 0
+    
+    logging.info(f"Starting embedding extraction for {name or 'global clustering'}...")
+    
+    for file_idx, (bbox_file, tile_path) in enumerate(bbox_tile_pairs):
+        try:
+            with open(bbox_file, "r") as f:
+                bboxes_data = json.load(f)
+            if not isinstance(bboxes_data, list):
+                logging.warning(f"Invalid format in {bbox_file} (expected list). Skipping file.")
+                continue
+
+            tile_img = Image.open(tile_path)
+            file_bbox_count = 0
+
+            for bb_dict in bboxes_data:
+                if not isinstance(bb_dict, dict) or "label_id" not in bb_dict or "bbox" not in bb_dict:
+                    logging.warning(f"Skipping invalid entry in {bbox_file}: {bb_dict}")
+                    skipped_bbox_count += 1
+                    continue
+
+                label_id = bb_dict["label_id"]
+                bbox = bb_dict["bbox"]
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    logging.warning(f"Skipping entry with invalid bbox format in {bbox_file}: {bbox}")
+                    skipped_bbox_count += 1
+                    continue
+
+                emb = extract_patch_embedding(tile_img, bbox, model, transform, device)
+                if emb is not None:
+                    embeddings.append(emb)
+                    record_tracker.append((bbox_file, label_id, bbox))
+                    processed_bbox_count += 1
+                    file_bbox_count += 1
+                else:
+                    skipped_bbox_count += 1
+
+            tile_img.close()
+            processed_files += 1
+
+            # Progress logging every 50 files or for significant milestones
+            if (file_idx + 1) % 50 == 0 or (file_idx + 1) in [1, 10, 25]:
+                logging.info(f"  Progress for {name}: {file_idx + 1}/{len(bbox_tile_pairs)} files processed "
+                           f"({processed_bbox_count} embeddings, {skipped_bbox_count} skipped)")
+            
+            # Log individual file progress for first few files or if very few files total
+            if file_idx < 5 or len(bbox_tile_pairs) <= 20:
+                rel_path = os.path.relpath(bbox_file, args.segmentation_path) if hasattr(args, 'segmentation_path') else os.path.basename(bbox_file)
+                logging.info(f"    Processed {rel_path}: {file_bbox_count} embeddings extracted")
+
+        except json.JSONDecodeError:
+            logging.error(f"Error decoding JSON from {bbox_file}. Skipping.")
+        except FileNotFoundError:
+            logging.error(f"Tile image error: {tile_path}. Skipping {bbox_file}.")
+        except Exception as e:
+            logging.error(f"Unexpected error processing {bbox_file}: {e}", exc_info=True)
+
+    logging.info(f"Finished embedding extraction for {name}. Got {processed_bbox_count} embeddings.")
+    if skipped_bbox_count > 0:
+        logging.warning(f"Skipped {skipped_bbox_count} bounding boxes due to errors for {name}.")
+    if not embeddings:
+        logging.error(f"No embeddings extracted for {name}. Cannot proceed.")
+        return False
+
+    embeddings_np = np.array(embeddings, dtype=np.float32)
+    del embeddings  # Free memory
+    logging.info(f"Embeddings array shape for {name}: {embeddings_np.shape}")
+
+    # --- Optional: Normalize Embeddings ---
+    if args.normalize_embeddings:
+        logging.info(f"Applying L2 normalization to embeddings for {name}...")
+        embeddings_np = normalize(embeddings_np, norm='l2', axis=1)
+        logging.info(f"Normalized embeddings norm (mean) for {name}: {np.mean(np.linalg.norm(embeddings_np, axis=1)):.4f}")
+
+    # --- Optional: Dimensionality Reduction (UMAP) ---
+    if args.use_umap:
+        logging.info(f"Applying UMAP dimensionality reduction for {name}:")
+        logging.info(f"  n_components={args.umap_n_components}, n_neighbors={args.umap_n_neighbors}, "
+                     f"min_dist={args.umap_min_dist}, metric='{args.umap_metric}'")
+        try:
+            reducer = umap.UMAP(
+                n_neighbors=args.umap_n_neighbors,
+                n_components=args.umap_n_components,
+                min_dist=args.umap_min_dist,
+                metric=args.umap_metric,
+                random_state=42,
+                n_jobs=-1,
+                verbose=False
+            )
+            embeddings_np = reducer.fit_transform(embeddings_np)
+            logging.info(f"Embeddings shape after UMAP for {name}: {embeddings_np.shape}")
+        except Exception as e:
+            logging.error(f"UMAP failed for {name}: {e}. Proceeding with original embeddings.", exc_info=True)
+
+    # --- Determine DBSCAN Epsilon ---
+    if len(embeddings_np) < args.min_samples:
+        logging.error(f"Number of embeddings ({len(embeddings_np)}) is less than min_samples ({args.min_samples}) for {name}. Cannot run DBSCAN.")
+        return False
+
+    chosen_eps = args.eps
+    if chosen_eps is None:
+        logging.info(f"Estimating optimal DBSCAN eps for {name}...")
+        chosen_eps = find_optimal_eps(
+            embeddings=embeddings_np,
+            min_samples=args.min_samples,
+            output_path=output_path,
+            sensitivity=args.auto_eps_sensitivity,
+            fallback_percentile=args.auto_eps_fallback_percentile
+        )
+        if chosen_eps is None or chosen_eps <= 0:
+            logging.error(f"Failed to determine a valid positive eps automatically for {name}. Cannot proceed.")
+            return False
+        logging.info(f"Using automatically estimated eps = {chosen_eps:.4f} for {name}")
+    else:
+        logging.info(f"Using user-provided eps = {chosen_eps} for {name}")
+
+    # --- Perform DBSCAN Clustering ---
+    labels = None
+    use_gpu_dbscan = args.gpu and HAS_CUML
+
+    if use_gpu_dbscan:
+        try:
+            if args.dbscan_metric.lower() != "euclidean":
+                logging.warning(f"cuML DBSCAN primarily uses Euclidean metric. Requested '{args.dbscan_metric}' ignored for GPU.")
+
+            logging.info(f"Using GPU DBSCAN for {name}")
+            embeddings_gpu = cp.asarray(embeddings_np, order='C')
+            dbscan_gpu = GPUDbscan(eps=chosen_eps, min_samples=args.min_samples)
+            dbscan_gpu.fit(embeddings_gpu)
+            labels = dbscan_gpu.labels_.get()
+            del embeddings_gpu
+            cp.get_default_memory_pool().free_all_blocks()
+        except Exception as e:
+            logging.error(f"cuML DBSCAN failed for {name}: {e}. Falling back to CPU.", exc_info=True)
+            use_gpu_dbscan = False
+
+    if not use_gpu_dbscan:
+        metric = args.dbscan_metric.lower()
+        try:
+            from sklearn.metrics import pairwise_distances
+            _ = pairwise_distances(embeddings_np[:2], metric=metric)
+        except Exception as metric_e:
+            logging.warning(f"Metric '{metric}' is invalid for sklearn DBSCAN: {metric_e}. Using 'euclidean'.")
+            metric = "euclidean"
+
+        logging.info(f"Using CPU DBSCAN for {name}")
+        dbscan_cpu = CPUDbscan(eps=chosen_eps, min_samples=args.min_samples, metric=metric, n_jobs=-1)
+        labels = dbscan_cpu.fit_predict(embeddings_np)
+
+    # --- Compute Centroids and Confidences ---
+    from collections import defaultdict
+    cluster_to_indices = defaultdict(list)
+    for i, cluster_id in enumerate(labels):
+        cluster_to_indices[cluster_id].append(i)
+
+    centroids: Dict[int, np.ndarray] = {}
+    for cluster_id, indices in cluster_to_indices.items():
+        if cluster_id == -1: continue
+        cluster_embeddings = embeddings_np[indices]
+        if len(cluster_embeddings) > 0:
+            centroids[cluster_id] = np.mean(cluster_embeddings, axis=0)
+
+    cluster_assignments = []
+    for i, emb in enumerate(embeddings_np):
+        cluster_id = int(labels[i])
+        bbox_file, label_id, bbox = record_tracker[i]
+
+        confidence = 0.0
+        if cluster_id != -1 and cluster_id in centroids:
+            confidence = compute_cluster_confidence(emb, centroids[cluster_id])
+
+        cluster_assignments.append({
+            "bbox_file": bbox_file,
+            "label_id": label_id,
+            "bbox": bbox,
+            "cluster_id": cluster_id,
+            "confidence": confidence
+        })
+
+    out_json_path = os.path.join(output_path, "cluster_assignments.json")
+    try:
+        with open(out_json_path, "w") as f:
+            json.dump(cluster_assignments, f, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to write output JSON to {out_json_path}: {e}", exc_info=True)
+        return False
+
+    unique_labels = set(labels)
+    n_clusters = len(unique_labels - {-1})
+    n_noise = list(labels).count(-1)
+    noise_percent = (n_noise / len(labels)) * 100 if len(labels) > 0 else 0
+    
+    # Log cluster size distribution
+    cluster_sizes = {}
+    for cluster_id in unique_labels:
+        if cluster_id != -1:
+            cluster_sizes[cluster_id] = list(labels).count(cluster_id)
+    
+    if cluster_sizes:
+        avg_cluster_size = np.mean(list(cluster_sizes.values()))
+        max_cluster_size = max(cluster_sizes.values())
+        min_cluster_size = min(cluster_sizes.values())
+        
+        logging.info(f"Clustering results for {name}:")
+        logging.info(f"  • Total embeddings processed: {len(labels)}")
+        logging.info(f"  • Clusters found: {n_clusters}")
+        logging.info(f"  • Noise points: {n_noise} ({noise_percent:.1f}%)")
+        logging.info(f"  • Cluster size statistics:")
+        logging.info(f"    - Average: {avg_cluster_size:.1f}")
+        logging.info(f"    - Range: {min_cluster_size} - {max_cluster_size}")
+        logging.info(f"  • Parameters used: eps={chosen_eps:.4f}, min_samples={args.min_samples}")
+        
+        # Show top 10 largest clusters
+        if len(cluster_sizes) > 0:
+            top_clusters = sorted(cluster_sizes.items(), key=lambda x: x[1], reverse=True)[:10]
+            logging.info(f"  • Top {min(len(top_clusters), 10)} largest clusters:")
+            for cluster_id, size in top_clusters:
+                logging.info(f"    - Cluster {cluster_id}: {size} cells")
+    else:
+        logging.warning(f"No valid clusters found for {name}!")
+    
+    logging.info(f"Saved cluster assignments to: {out_json_path}")
+    
+    return True
+
 # --- Main Function ---
 def main():
     logging.basicConfig(
@@ -194,6 +471,8 @@ def main():
     parser.add_argument("--prepped_tiles_path", type=str, required=True, help="Path to tiled images.")
     parser.add_argument("--output_path", type=str, required=True, help="Where to write cluster outputs.")
     parser.add_argument("--gpu", action="store_true", help="Use GPU for embedding extraction and DBSCAN (if cuML available).")
+    parser.add_argument("--per_slide", action="store_true", help="Cluster each slide separately instead of all slides together.")
+    parser.add_argument("--slide_folders", type=str, nargs='*', help="Specific slide folder names to process. If not provided, processes all folders.")
 
     # Embedding Options
     parser.add_argument("--normalize_embeddings", action="store_true", help="L2 normalize embeddings before reduction/clustering.")
@@ -241,238 +520,97 @@ def main():
     model = load_pretrained_resnet50(device)
     transform = get_image_transform()
 
-    # --- Extract Embeddings ---
-    embeddings = []
-    record_tracker = [] # Stores (bbox_file, label_id, bbox)
-    logging.info("Starting embedding extraction...")
-    bbox_json_files = glob.glob(os.path.join(args.segmentation_path, "**/*_bboxes.json"), recursive=True)
-    logging.info(f"Found {len(bbox_json_files)} bounding-box JSON files.")
-    if not bbox_json_files:
-        logging.warning("No bounding-box JSON files found. Exiting.")
-        return
-
-    processed_bbox_count = 0
-    skipped_bbox_count = 0
-    for file_idx, bbox_file in enumerate(bbox_json_files):
-        rel_dir = os.path.relpath(os.path.dirname(bbox_file), args.segmentation_path)
-        tile_name = os.path.basename(bbox_file).replace("_bboxes.json", ".png")
-        tile_path = os.path.join(args.prepped_tiles_path, rel_dir, tile_name)
-
-        if not os.path.exists(tile_path):
-            logging.warning(f"Tile image not found: {tile_path}. Skipping {bbox_file}.")
-            continue
-
-        try:
-            with open(bbox_file, "r") as f:
-                bboxes_data = json.load(f)
-            if not isinstance(bboxes_data, list):
-                logging.warning(f"Invalid format in {bbox_file} (expected list). Skipping file.")
-                continue
-
-            tile_img = Image.open(tile_path) # Open here, convert later if needed
-
-            for bb_dict in bboxes_data:
-                if not isinstance(bb_dict, dict) or "label_id" not in bb_dict or "bbox" not in bb_dict:
-                    logging.warning(f"Skipping invalid entry in {bbox_file}: {bb_dict}")
-                    skipped_bbox_count += 1
-                    continue
-
-                label_id = bb_dict["label_id"]
-                bbox = bb_dict["bbox"]
-                if not isinstance(bbox, list) or len(bbox) != 4:
-                    logging.warning(f"Skipping entry with invalid bbox format in {bbox_file}: {bbox}")
-                    skipped_bbox_count += 1
-                    continue
-
-                emb = extract_patch_embedding(tile_img, bbox, model, transform, device)
-                if emb is not None:
-                    embeddings.append(emb)
-                    record_tracker.append((bbox_file, label_id, bbox))
-                    processed_bbox_count += 1
-                else:
-                    skipped_bbox_count += 1
-
-            # Close image file handle
-            tile_img.close()
-
-            if (file_idx + 1) % 100 == 0:
-                 logging.info(f"Processed {file_idx + 1}/{len(bbox_json_files)} JSON files ({processed_bbox_count} embeddings)...")
-
-        except json.JSONDecodeError:
-            logging.error(f"Error decoding JSON from {bbox_file}. Skipping.")
-        except FileNotFoundError:
-            logging.error(f"Tile image error during processing loop: {tile_path}. Skipping {bbox_file}.")
-        except Exception as e:
-            logging.error(f"Unexpected error processing {bbox_file}: {e}", exc_info=True)
-
-    logging.info(f"Finished embedding extraction. Got {processed_bbox_count} embeddings.")
-    if skipped_bbox_count > 0:
-        logging.warning(f"Skipped {skipped_bbox_count} bounding boxes due to errors.")
-    if not embeddings:
-        logging.error("No embeddings extracted. Cannot proceed.")
-        return
-
-    embeddings_np = np.array(embeddings, dtype=np.float32)
-    del embeddings # Free memory
-    logging.info(f"Embeddings array shape: {embeddings_np.shape}")
-
-    # --- Optional: Normalize Embeddings ---
-    if args.normalize_embeddings:
-        logging.info("Applying L2 normalization to embeddings...")
-        embeddings_np = normalize(embeddings_np, norm='l2', axis=1)
-        logging.info(f"Normalized embeddings norm (mean): {np.mean(np.linalg.norm(embeddings_np, axis=1)):.4f}")
-
-    # --- Optional: Dimensionality Reduction (UMAP) ---
-    if args.use_umap:
-        logging.info(f"Applying UMAP dimensionality reduction:")
-        logging.info(f"  n_components={args.umap_n_components}, n_neighbors={args.umap_n_neighbors}, "
-                     f"min_dist={args.umap_min_dist}, metric='{args.umap_metric}'")
-        try:
-            reducer = umap.UMAP(
-                n_neighbors=args.umap_n_neighbors,
-                n_components=args.umap_n_components,
-                min_dist=args.umap_min_dist,
-                metric=args.umap_metric,
-                random_state=42, # For reproducibility
-                n_jobs=-1,       # Use all available cores
-                verbose=False    # Set to True for more UMAP output
-            )
-            embeddings_np = reducer.fit_transform(embeddings_np)
-            logging.info(f"Embeddings shape after UMAP: {embeddings_np.shape}")
-            # Save UMAP model? Maybe not essential for basic clustering pipeline.
-            # import joblib
-            # joblib.dump(reducer, os.path.join(args.output_path, 'umap_reducer.joblib'))
-        except Exception as e:
-            logging.error(f"UMAP failed: {e}. Proceeding with original (potentially normalized) embeddings.", exc_info=True)
-            # The script will continue with the original `embeddings_np` if UMAP fails
-
-    # --- Determine DBSCAN Epsilon ---
-    # Make sure we have enough points for min_samples *after* potential UMAP
-    if len(embeddings_np) < args.min_samples:
-        logging.error(f"Number of embeddings ({len(embeddings_np)}) is less than min_samples ({args.min_samples}). Cannot run DBSCAN.")
-        return
-
-    chosen_eps = args.eps
-    if chosen_eps is None:
-        logging.info("Estimating optimal DBSCAN eps...")
-        # Pass the potentially reduced embeddings to the estimator
-        chosen_eps = find_optimal_eps(
-            embeddings=embeddings_np,
-            min_samples=args.min_samples,
-            output_path=args.output_path,
-            sensitivity=args.auto_eps_sensitivity,
-            fallback_percentile=args.auto_eps_fallback_percentile
-        )
-        if chosen_eps is None or chosen_eps <= 0:
-            logging.error(f"Failed to determine a valid positive eps automatically (got {chosen_eps}). Cannot proceed.")
+    # --- Choose Processing Mode ---
+    if args.per_slide:
+        # Per-slide clustering mode
+        logging.info("Per-slide clustering mode enabled.")
+        all_slide_dirs = [d for d in os.listdir(args.segmentation_path) 
+                         if os.path.isdir(os.path.join(args.segmentation_path, d))]
+        
+        if not all_slide_dirs:
+            logging.error(f"No slide directories found in {args.segmentation_path}")
             return
-        logging.info(f"Using automatically estimated eps = {chosen_eps:.4f}")
-    else:
-        logging.info(f"Using user-provided eps = {chosen_eps}")
-
-
-    # --- Perform DBSCAN Clustering ---
-    labels = None
-    use_gpu_dbscan = args.gpu and HAS_CUML # Check again if GPU is desired *and* available
-
-    if use_gpu_dbscan:
-        try:
-            if args.dbscan_metric.lower() != "euclidean":
-                 logging.warning(f"cuML DBSCAN primarily uses Euclidean metric. Requested '{args.dbscan_metric}' ignored for GPU.")
-
-            logging.info(f"Using GPU DBSCAN (cuML) with eps={chosen_eps:.4f}, min_samples={args.min_samples}, metric=euclidean")
-            embeddings_gpu = cp.asarray(embeddings_np, order='C') # Ensure C-contiguous for cuML
-            dbscan_gpu = GPUDbscan(eps=chosen_eps, min_samples=args.min_samples)
-            dbscan_gpu.fit(embeddings_gpu)
-            labels = dbscan_gpu.labels_.get() # Get labels back to CPU
-            del embeddings_gpu # Free GPU memory
-            cp.get_default_memory_pool().free_all_blocks()
-        except Exception as e:
-            logging.error(f"cuML DBSCAN failed: {e}. Falling back to CPU.", exc_info=True)
-            if 'embeddings_gpu' in locals(): del embeddings_gpu
-            if 'cp' in locals(): cp.get_default_memory_pool().free_all_blocks()
-            use_gpu_dbscan = False # Ensure fallback
-
-    if not use_gpu_dbscan: # Fallback or initial CPU choice
-        # Check metric for sklearn
-        metric = args.dbscan_metric.lower()
-        try:
-            # Test metric validity briefly before fitting
-            _ = CPUDbscan(metric=metric)
-        except ValueError:
-             logging.warning(f"Unsupported metric '{metric}' for scikit-learn DBSCAN. Defaulting to 'euclidean'.")
-             metric = 'euclidean'
-
-        logging.info(f"Using CPU DBSCAN (sklearn) with eps={chosen_eps:.4f}, min_samples={args.min_samples}, metric={metric}")
-        try:
-            dbscan_cpu = CPUDbscan(eps=chosen_eps, min_samples=args.min_samples, metric=metric, n_jobs=-1)
-            # Ensure data is C-contiguous for potential efficiency gains in sklearn too
-            if not embeddings_np.flags['C_CONTIGUOUS']:
-                 embeddings_np = np.ascontiguousarray(embeddings_np)
-            dbscan_cpu.fit(embeddings_np)
-            labels = dbscan_cpu.labels_
-        except Exception as e:
-             logging.error(f"Scikit-learn DBSCAN failed: {e}", exc_info=True)
-             return # Exit if clustering fails critically
-
-    # --- Process Results ---
-    if labels is None:
-        logging.error("Clustering did not produce labels. Exiting.")
-        return
-
-    logging.info("Processing clustering results...")
-
-    cluster_to_indices: Dict[int, list[int]] = {}
-    for idx, lbl in enumerate(labels):
-        cluster_id = int(lbl)
-        cluster_to_indices.setdefault(cluster_id, []).append(idx)
-
-    centroids: Dict[int, np.ndarray] = {}
-    for cluster_id, indices in cluster_to_indices.items():
-        if cluster_id == -1: continue # Skip noise
-        cluster_embeddings = embeddings_np[indices]
-        if len(cluster_embeddings) > 0:
-             centroids[cluster_id] = np.mean(cluster_embeddings, axis=0)
+        
+        # Filter slides based on --slide_folders argument
+        if args.slide_folders:
+            # Validate that requested slide folders exist
+            slide_dirs = []
+            for slide_folder in args.slide_folders:
+                if slide_folder in all_slide_dirs:
+                    slide_dirs.append(slide_folder)
+                    logging.info(f"Selected slide folder: {slide_folder}")
+                else:
+                    logging.warning(f"Requested slide folder '{slide_folder}' not found in {args.segmentation_path}. Available folders: {all_slide_dirs}")
+            
+            if not slide_dirs:
+                logging.error("None of the requested slide folders were found. Exiting.")
+                return
         else:
-             logging.warning(f"Cluster {cluster_id} has indices but no embeddings. Skipping centroid.")
-
-
-    cluster_assignments = []
-    for i, emb in enumerate(embeddings_np):
-        cluster_id = int(labels[i])
-        bbox_file, label_id, bbox = record_tracker[i] # Get original info
-
-        confidence = 0.0
-        if cluster_id != -1 and cluster_id in centroids:
-            confidence = compute_cluster_confidence(emb, centroids[cluster_id])
-        elif cluster_id != -1:
-            logging.warning(f"Centroid missing for cluster {cluster_id} (item {i}). Confidence set to 0.")
-
-        cluster_assignments.append({
-            "bbox_file": bbox_file,
-            "label_id": label_id,
-            "bbox": bbox,
-            "cluster_id": cluster_id,
-            "confidence": confidence
-        })
-
-    out_json_path = os.path.join(args.output_path, "cluster_assignments.json")
-    try:
-        with open(out_json_path, "w") as f:
-            json.dump(cluster_assignments, f, indent=2)
-    except Exception as e:
-         logging.error(f"Failed to write output JSON to {out_json_path}: {e}", exc_info=True)
-         return
-
-    unique_labels = set(labels)
-    n_clusters = len(unique_labels - {-1})
-    n_noise = list(labels).count(-1)
-    noise_percent = (n_noise / len(labels)) * 100 if len(labels) > 0 else 0
-    logging.info(
-        f"DBSCAN found {n_clusters} clusters and {n_noise} noise points ({noise_percent:.1f}% noise). "
-        f"Wrote results to {out_json_path}"
-    )
-    logging.info("Clustering process finished.")
+            slide_dirs = all_slide_dirs
+            logging.info(f"No specific slide folders requested. Processing all {len(slide_dirs)} folders: {slide_dirs}")
+            
+        failed_slides = []
+        successful_slides = []
+        
+        logging.info(f"Starting per-slide clustering for {len(slide_dirs)} slides...")
+        
+        for slide_idx, slide_name in enumerate(slide_dirs, 1):
+            logging.info(f"Processing slide {slide_idx}/{len(slide_dirs)}: {slide_name}")
+            
+            slide_segmentation_path = os.path.join(args.segmentation_path, slide_name)
+            slide_prepped_tiles_path = os.path.join(args.prepped_tiles_path, slide_name)
+            slide_output_path = os.path.join(args.output_path, slide_name)
+            
+            if not os.path.exists(slide_prepped_tiles_path):
+                logging.warning(f"Prepped tiles directory not found for slide {slide_name}: {slide_prepped_tiles_path}. Skipping.")
+                failed_slides.append(slide_name)
+                continue
+            
+            # Get bbox/tile pairs for this slide
+            bbox_tile_pairs = get_bbox_file_list(slide_segmentation_path, slide_prepped_tiles_path)
+            
+            if not bbox_tile_pairs:
+                logging.warning(f"No valid bbox/tile pairs found for slide {slide_name}. Skipping.")
+                failed_slides.append(slide_name)
+                continue
+            
+            logging.info(f"Found {len(bbox_tile_pairs)} bbox/tile pairs for slide {slide_name}")
+            
+            # Perform clustering for this slide
+            success = perform_clustering(bbox_tile_pairs, slide_output_path, model, transform, device, args, slide_name)
+            if success:
+                successful_slides.append(slide_name)
+                logging.info(f"✓ Successfully processed slide {slide_idx}/{len(slide_dirs)}: {slide_name}")
+            else:
+                failed_slides.append(slide_name)
+                logging.error(f"✗ Failed to process slide {slide_idx}/{len(slide_dirs)}: {slide_name}")
+        
+        # Final summary
+        logging.info(f"Clustering summary:")
+        logging.info(f"  Total slides attempted: {len(slide_dirs)}")
+        logging.info(f"  Successfully processed: {len(successful_slides)}")
+        logging.info(f"  Failed: {len(failed_slides)}")
+        
+        if successful_slides:
+            logging.info(f"  Successful slides: {successful_slides}")
+        if failed_slides:
+            logging.warning(f"  Failed slides: {failed_slides}")
+        
+        return
+    
+    else:
+        # Global clustering mode
+        logging.info("Running clustering across all slides together (global clustering)...")
+        
+        # Get all bbox/tile pairs across all slides
+        bbox_tile_pairs = get_bbox_file_list(args.segmentation_path, args.prepped_tiles_path)
+        
+        # Perform clustering for all slides combined
+        success = perform_clustering(bbox_tile_pairs, args.output_path, model, transform, device, args)
+        if not success:
+            logging.error("Global clustering failed.")
+        else:
+            logging.info("Global clustering completed successfully.")
 
 
 if __name__ == "__main__":
