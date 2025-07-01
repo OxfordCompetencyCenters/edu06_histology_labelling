@@ -378,6 +378,8 @@ def build_components(
 
     annotation_component = None
     if enable_annotations:
+        # Don't use --no_text if we want to show cluster IDs or other text
+        use_text = annotation_text_use_pred_class or annotation_text_use_cluster_id or annotation_text_use_cluster_confidence
         annotation_cmd = (
             "python annotate_images.py "
             "--json_dir ${{inputs.annotations_json}} "
@@ -387,7 +389,7 @@ def build_components(
             f"{'--random_labels ' if annotation_random_labels else ''}"
             f"{'--draw_bbox ' if annotation_draw_bbox else ''}"
             f"{'--draw_polygon ' if annotation_draw_polygon else ''}"
-            f"{'--no_text ' if annotation_no_text else ''}"
+            f"{'--no_text ' if annotation_no_text and not use_text else ''}"
             f"{'--text_use_pred_class ' if annotation_text_use_pred_class else ''}"
             f"{'--text_use_cluster_id ' if annotation_text_use_cluster_id else ''}"
             f"{'--text_use_cluster_confidence ' if annotation_text_use_cluster_confidence else ''}"
@@ -433,6 +435,8 @@ def build_components(
 
     filtered_annotation_component = None
     if enable_filtered_annotations and enable_cluster_tiles:
+        # Don't use --no_text if we want to show cluster IDs or other text
+        filtered_use_text = filtered_annotation_text_use_pred_class or filtered_annotation_text_use_cluster_id or filtered_annotation_text_use_cluster_confidence
         filtered_annotation_cmd = (
             "python annotate_images.py "
             "--json_file ${{inputs.cluster_tiles_path}}/filtered_annotations.json "
@@ -442,7 +446,7 @@ def build_components(
             f"{'--random_labels ' if filtered_annotation_random_labels else ''}"
             f"{'--draw_bbox ' if filtered_annotation_draw_bbox else ''}"
             f"{'--draw_polygon ' if filtered_annotation_draw_polygon else ''}"
-            f"{'--no_text ' if filtered_annotation_no_text else ''}"
+            f"{'--no_text ' if filtered_annotation_no_text and not filtered_use_text else ''}"
             f"{'--text_use_pred_class ' if filtered_annotation_text_use_pred_class else ''}"
             f"{'--text_use_cluster_id ' if filtered_annotation_text_use_cluster_id else ''}"
             f"{'--text_use_cluster_confidence ' if filtered_annotation_text_use_cluster_confidence else ''}"

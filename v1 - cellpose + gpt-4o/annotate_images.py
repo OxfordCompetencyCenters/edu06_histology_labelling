@@ -353,7 +353,7 @@ def main():
                         help="If set, draw polygons.")
 
     # Text Content Control  
-    parser.add_argument("--no_text", action="store_true", default=True,
+    parser.add_argument("--no_text", action="store_true",
                         help="If set, do NOT draw any text labels on the image.")
     parser.add_argument("--text_use_pred_class", action="store_true",
                         help="Include predicted class in the text label (ignored if --no_text).")
@@ -393,11 +393,19 @@ def main():
     if not (args.draw_bbox or args.draw_polygon):
          print("Warning: Neither --draw_bbox nor --draw_polygon specified. No shapes will be drawn.")
 
-    if not args.no_text and not (args.text_use_pred_class or args.text_use_cluster_id or args.text_use_cluster_confidence) and (args.draw_bbox or args.draw_polygon):
-        print("Info: No text components (--text_use_*) selected, but --no_text is not set. Only shapes will be drawn.")
+    # Check if text flags are specified without --no_text
+    text_flags_specified = args.text_use_pred_class or args.text_use_cluster_id or args.text_use_cluster_confidence
+    
+    if not args.no_text and not text_flags_specified and (args.draw_bbox or args.draw_polygon):
+        print("Info: No text components (--text_use_*) selected. Only shapes will be drawn.")
 
-    if args.no_text and (args.text_use_pred_class or args.text_use_cluster_id or args.text_use_cluster_confidence):
-        print("Info: --no_text is set. Flags --text_use_* will be ignored.")
+    if args.no_text and text_flags_specified:
+        print("Warning: --no_text is set but text flags (--text_use_*) are also specified. Text flags will be ignored.")
+    elif text_flags_specified and not args.no_text:
+        print(f"Info: Text will be displayed with the following components: " +
+              f"{'pred_class ' if args.text_use_pred_class else ''}" +
+              f"{'cluster_id ' if args.text_use_cluster_id else ''}" +
+              f"{'cluster_confidence ' if args.text_use_cluster_confidence else ''}".strip())
 
     # Auto-enable common defaults based on provided example command
     if not any([args.draw_bbox, args.draw_polygon]):

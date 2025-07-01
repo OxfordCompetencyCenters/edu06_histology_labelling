@@ -26,15 +26,20 @@ def parse_tile_filename(filename: str) -> dict | None:
         return None
     
     try:
-        # Split by double underscores to get main components
-        parts = basename.split('__')
-        if len(parts) != 5:  # slide_id, MAG_xxx, X_xxx, Y_xxx, IDX_xxx
+        # Find the positions of the required components
+        mag_idx = basename.find('__MAG_')
+        x_idx = basename.find('__X_')
+        y_idx = basename.find('__Y_')
+        idx_idx = basename.find('__IDX_')
+        
+        if mag_idx == -1 or x_idx == -1 or y_idx == -1 or idx_idx == -1:
             return None
         
-        slide_id = parts[0]
+        # Extract slide_id (everything before __MAG_)
+        slide_id = basename[:mag_idx]
         
         # Parse magnification: MAG_1d000 -> 1.000
-        mag_part = parts[1]
+        mag_part = basename[mag_idx+2:x_idx]  # Skip '__' and go until next '__X_'
         if not mag_part.startswith('MAG_'):
             return None
         mag_value = mag_part[4:]  # Remove 'MAG_' prefix
@@ -44,22 +49,22 @@ def parse_tile_filename(filename: str) -> dict | None:
         magnification = int(int_part) + (int(frac_part) / 1000.0)
         
         # Parse X coordinate: X_2048 -> 2048
-        x_part = parts[2]
+        x_part = basename[x_idx+2:y_idx]  # Skip '__' and go until next '__Y_'
         if not x_part.startswith('X_'):
             return None
         x = int(x_part[2:])
         
         # Parse Y coordinate: Y_1024 -> 1024
-        y_part = parts[3]
+        y_part = basename[y_idx+2:idx_idx]  # Skip '__' and go until next '__IDX_'
         if not y_part.startswith('Y_'):
             return None
         y = int(y_part[2:])
         
         # Parse index: IDX_000001 -> 1
-        idx_part = parts[4]
+        idx_part = basename[idx_idx+2:]  # Skip '__' and take rest
         if not idx_part.startswith('IDX_'):
             return None
-        idx = int(idx_part[4:])
+        idx = int(idx_part[4:])  # Remove 'IDX_' prefix
         
         return {
             "slide_id": slide_id,
