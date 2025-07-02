@@ -433,17 +433,34 @@ def main():
         # Append this cell's data to the list for its tile
         grouped_by_tile[tile_path]["classified_cells"].append(cell_data)
 
-    # Convert the dictionary of tiles back into a list for the final JSON output
+    # Convert the dictionary of tiles back into a list and group by slide
     final_output_data = list(grouped_by_tile.values())
-
-    out_file = os.path.join(args.output_path, "classification_results.json")
-    logging.info(f"Attempting to write {len(final_output_data)} tile entries to {out_file}...")
-    try:
-        with open(out_file, "w") as f:
-            json.dump(final_output_data, f, indent=2)
-        logging.info("Classification step complete. Output includes all cells (classified or 'Unclassified'). Output: %s", out_file)
-    except Exception as e:
-        logging.error(f"Failed to write output JSON to {out_file}: {e}")
+    
+    # Group results by slide name for per-slide output
+    slides_data = defaultdict(list)
+    for tile_data in final_output_data:
+        slide_name = tile_data["slide_name"]
+        slides_data[slide_name].append(tile_data)
+    
+    # Create output directory structure and save per slide
+    os.makedirs(args.output_path, exist_ok=True)
+    
+    total_tiles_written = 0
+    for slide_name, tiles_for_slide in slides_data.items():
+        slide_output_dir = os.path.join(args.output_path, slide_name)
+        os.makedirs(slide_output_dir, exist_ok=True)
+        
+        out_file = os.path.join(slide_output_dir, "classification_results.json")
+        logging.info(f"Writing {len(tiles_for_slide)} tile entries for slide {slide_name} to {out_file}...")
+        try:
+            with open(out_file, "w") as f:
+                json.dump(tiles_for_slide, f, indent=2)
+            total_tiles_written += len(tiles_for_slide)
+            logging.info(f"Classification for slide {slide_name} complete. Output: {out_file}")
+        except Exception as e:
+            logging.error(f"Failed to write output JSON for slide {slide_name} to {out_file}: {e}")
+    
+    logging.info(f"Classification step complete. Total {total_tiles_written} tile entries written across {len(slides_data)} slides.")
 
 if __name__ == "__main__":
     main()

@@ -106,39 +106,79 @@ def resolve_local_image_path(tile_path, images_dir):
     # If nothing found, return the most likely path for error reporting
     return os.path.join(images_dir, subpath)
 
-def find_annotation_json(json_path):
+def find_annotation_files(json_path):
     """
-    Find the annotation JSON file from either a direct file path or a directory.
+    Find annotation JSON files from either a direct file path or a directory.
+    Returns a dictionary mapping slide names to file paths for per-slide processing.
     
     Args:
         json_path: Path to a JSON file or directory containing JSON files
         
     Returns:
-        Path to the annotation JSON file
+        Dictionary mapping slide names to annotation JSON file paths
     """
+    annotation_files = {}
+    
     if os.path.isfile(json_path):
-        return json_path
+        # Single file - extract slide name from parent directory or use 'global'
+        parent_dir = os.path.basename(os.path.dirname(json_path))
+        slide_name = parent_dir if parent_dir and parent_dir != '.' else 'global'
+        annotation_files[slide_name] = json_path
+        return annotation_files
     
     if os.path.isdir(json_path):
-        # Look for common annotation file patterns
-        patterns = [
-            "*.json",
-            "*annotations.json",
-            "*_annotations.json",
-            "final_annotations.json",
-            "v1_*_annotations.json"
-        ]
+        # Look for per-slide structure: slide_name/annotation_file.json
+        for slide_dir in os.listdir(json_path):
+            slide_path = os.path.join(json_path, slide_dir)
+            if os.path.isdir(slide_path):
+                # Look for common annotation file patterns in this slide directory
+                patterns = [
+                    "*.json",
+                    "*annotations.json",
+                    "*_annotations.json",
+                    "final_annotations.json",
+                    "v1_*_annotations.json",
+                    "filtered_annotations.json"
+                ]
+                
+                for pattern in patterns:
+                    matches = glob.glob(os.path.join(slide_path, pattern))
+                    if matches:
+                        # Prefer files with "annotation" in the name
+                        annotation_files_in_dir = [f for f in matches if "annotation" in os.path.basename(f).lower()]
+                        if annotation_files_in_dir:
+                            annotation_files[slide_dir] = annotation_files_in_dir[0]
+                            break
+                        else:
+                            annotation_files[slide_dir] = matches[0]
+                            break
         
-        for pattern in patterns:
-            matches = glob.glob(os.path.join(json_path, pattern))
-            if matches:
-                # Return the first match, preferring files with "annotation" in the name
-                annotation_files = [f for f in matches if "annotation" in os.path.basename(f).lower()]
-                if annotation_files:
-                    return annotation_files[0]
-                return matches[0]
+        # Fallback: look for a single global file in the root directory
+        if not annotation_files:
+            patterns = [
+                "*.json",
+                "*annotations.json", 
+                "*_annotations.json",
+                "final_annotations.json",
+                "v1_*_annotations.json",
+                "filtered_annotations.json"
+            ]
+            
+            for pattern in patterns:
+                matches = glob.glob(os.path.join(json_path, pattern))
+                if matches:
+                    annotation_files_in_root = [f for f in matches if "annotation" in os.path.basename(f).lower()]
+                    if annotation_files_in_root:
+                        annotation_files['global'] = annotation_files_in_root[0]
+                        break
+                    else:
+                        annotation_files['global'] = matches[0]
+                        break
     
-    raise FileNotFoundError(f"No JSON annotation file found at {json_path}")
+    if not annotation_files:
+        raise FileNotFoundError(f"No JSON annotation files found at {json_path}")
+    
+    return annotation_files
 
 # --- Annotation Logic ---
 def annotate_images(json_file, images_dir, output_dir,
@@ -376,15 +416,23 @@ def main():
 
     args = parser.parse_args()
 
-    # Determine JSON file path
+    # Determine JSON file paths (per-slide structure)
     if args.json_file and args.json_dir:
         print("Error: Specify either --json_file or --json_dir, not both.")
         return
     elif args.json_file:
-        json_path = args.json_file
+        # Single file - treat as one slide
+        slide_name = os.path.basename(os.path.dirname(args.json_file))
+        if not slide_name or slide_name == '.':
+            slide_name = 'global'
+        annotation_files = {slide_name: args.json_file}
     elif args.json_dir:
-        json_path = find_annotation_json(args.json_dir)
-        print(f"Found annotation file: {json_path}")
+        try:
+            annotation_files = find_annotation_files(args.json_dir)
+            print(f"Found annotation files for slides: {list(annotation_files.keys())}")
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            return
     else:
         print("Error: Must specify either --json_file or --json_dir.")
         return
@@ -413,22 +461,32 @@ def main():
         args.draw_polygon = True
         print("Info: Auto-enabled --draw_polygon since no drawing mode was specified.")
 
-    annotate_images(
-        json_file=json_path,
-        images_dir=args.images_dir,
-        output_dir=args.output_dir,
-        max_labels=args.max_labels,
-        random_labels=args.random_labels,
-        draw_bbox_flag=args.draw_bbox,
-        draw_polygon_flag=args.draw_polygon,
-        text_scale=args.text_scale,
-        text_use_pred_class=args.text_use_pred_class,
-        text_use_cluster_id=args.text_use_cluster_id,
-        text_use_cluster_confidence=args.text_use_cluster_confidence,
-        no_text=args.no_text,
-        color_by=args.color_by,
-        filter_unclassified=args.filter_unclassified
-    )
+    # Process each slide separately
+    print(f"Processing {len(annotation_files)} slide(s)...")
+    for slide_name, json_path in annotation_files.items():
+        print(f"\nProcessing slide: {slide_name}")
+        
+        # Create slide-specific output directory
+        slide_output_dir = os.path.join(args.output_dir, slide_name)
+        
+        annotate_images(
+            json_file=json_path,
+            images_dir=args.images_dir,
+            output_dir=slide_output_dir,
+            max_labels=args.max_labels,
+            random_labels=args.random_labels,
+            draw_bbox_flag=args.draw_bbox,
+            draw_polygon_flag=args.draw_polygon,
+            text_scale=args.text_scale,
+            text_use_pred_class=args.text_use_pred_class,
+            text_use_cluster_id=args.text_use_cluster_id,
+            text_use_cluster_confidence=args.text_use_cluster_confidence,
+            no_text=args.no_text,
+            color_by=args.color_by,
+            filter_unclassified=args.filter_unclassified
+        )
+    
+    print(f"\nCompleted processing all slides. Annotated images saved to: {args.output_dir}")
 
 if __name__ == "__main__":
     main()

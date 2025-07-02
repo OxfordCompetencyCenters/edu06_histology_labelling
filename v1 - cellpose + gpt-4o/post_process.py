@@ -100,15 +100,24 @@ def mask_to_polygon_list(mask: np.ndarray):
         polygons.append({"label_id": int(lbl), "polygon": poly})
     return polygons
 
-def find_classification_file(cls_root: Path) -> Path | None:
-    """Locate classification_results.json (top-level or one directory deep)."""
-    direct = cls_root / "classification_results.json"
-    if direct.exists():
-        return direct
-    candidates = list(cls_root.glob("*/classification_results.json"))
-    if candidates:
-        return candidates[0]
-    return None
+def find_classification_files(cls_root: Path) -> dict:
+    """Locate classification_results.json files per slide directory."""
+    classification_files = {}
+    
+    # Look for per-slide structure: slide_name/classification_results.json
+    for slide_dir in cls_root.iterdir():
+        if slide_dir.is_dir():
+            cls_file = slide_dir / "classification_results.json"
+            if cls_file.exists():
+                classification_files[slide_dir.name] = cls_file
+    
+    # Fallback: check for single global file
+    if not classification_files:
+        global_file = cls_root / "classification_results.json"
+        if global_file.exists():
+            classification_files["global"] = global_file
+    
+    return classification_files
 
 # ───────────────────────────── main ───────────────────────────── #
 
@@ -130,67 +139,80 @@ def main():
     out_root = Path(args.output_path)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    cls_file = find_classification_file(cls_root)
-    if cls_file is None:
-        logging.error("classification_results.json not found under %s", cls_root)
+    classification_files = find_classification_files(cls_root)
+    if not classification_files:
+        logging.error("No classification_results.json files found under %s", cls_root)
         return
 
-    logging.info("Loading classifications from %s", cls_file)
-    classification_results = json.loads(cls_file.read_text())
-
-    final_ann = []
-    cell_id_counter = 1  # Global counter for unique cell IDs
-
-    for tile in classification_results:
-        tile_path = tile["tile_path"]
-        tile_name = tile["tile_name"]
-        slide_name = tile["slide_name"]
-
-        meta = parse_tile_meta(tile_name)
-        if meta is None:
-            logging.warning("Could not parse magnification from %s – skipping.", tile_name)
+    logging.info("Found classification files for slides: %s", list(classification_files.keys()))
+    
+    # Process each slide separately
+    for slide_name, cls_file in classification_files.items():
+        logging.info("Processing slide: %s from %s", slide_name, cls_file)
+        
+        # Create slide-specific output directory
+        slide_out_dir = out_root / slide_name
+        slide_out_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            classification_results = json.loads(cls_file.read_text())
+        except Exception as e:
+            logging.error("Failed to load classification file %s: %s", cls_file, e)
             continue
 
-        mask_name = tile_name + "_mask.png"
-        mask_path = seg_root / slide_name / mask_name
-        if not mask_path.exists():
-            logging.warning("Mask not found: %s", mask_path)
-            continue
+        final_ann = []
+        cell_id_counter = 1  # Reset counter for each slide
 
-        mask = np.array(Image.open(mask_path))
-        polys = mask_to_polygon_list(mask)
+        for tile in classification_results:
+            tile_path = tile["tile_path"]
+            tile_name = tile["tile_name"]
+            current_slide_name = tile["slide_name"]
 
-        cell_records = []
-        for poly in polys:
-            lbl_id = poly["label_id"]
-            cls_cell = next((c for c in tile["classified_cells"] if c["label_id"] == lbl_id), None)
-            if cls_cell is None:
-                logging.debug("No class for lbl=%d in %s", lbl_id, tile_name)
+            meta = parse_tile_meta(tile_name)
+            if meta is None:
+                logging.warning("Could not parse magnification from %s – skipping.", tile_name)
                 continue
-            cell_records.append({
-                "cell_id": cell_id_counter,
-                "label_id": lbl_id,
-                "polygon": poly["polygon"],
-                "pred_class": cls_cell["pred_class"],
-                "cluster_id": cls_cell.get("cluster_id"),
-                "cluster_confidence": cls_cell.get("cluster_confidence"),
-                "bbox": cls_cell["bbox"],
+
+            mask_name = tile_name + "_mask.png"
+            mask_path = seg_root / current_slide_name / mask_name
+            if not mask_path.exists():
+                logging.warning("Mask not found: %s", mask_path)
+                continue
+
+            mask = np.array(Image.open(mask_path))
+            polys = mask_to_polygon_list(mask)
+
+            cell_records = []
+            for poly in polys:
+                lbl_id = poly["label_id"]
+                cls_cell = next((c for c in tile["classified_cells"] if c["label_id"] == lbl_id), None)
+                if cls_cell is None:
+                    logging.debug("No class for lbl=%d in %s", lbl_id, tile_name)
+                    continue
+                cell_records.append({
+                    "cell_id": cell_id_counter,
+                    "label_id": lbl_id,
+                    "polygon": poly["polygon"],
+                    "pred_class": cls_cell["pred_class"],
+                    "cluster_id": cls_cell.get("cluster_id"),
+                    "cluster_confidence": cls_cell.get("cluster_confidence"),
+                    "bbox": cls_cell["bbox"],
+                })
+                cell_id_counter += 1  # Increment counter for next cell
+
+            final_ann.append({
+                "tile_path": tile_path,
+                "magnification": meta["magnification"],
+                "x": meta["x"],
+                "y": meta["y"],
+                "cells": cell_records,
             })
-            cell_id_counter += 1  # Increment counter for next cell
 
-        final_ann.append({
-            "tile_path": tile_path,
-            "magnification": meta["magnification"],
-            "x": meta["x"],
-            "y": meta["y"],
-            "cells": cell_records,
-        })
-
-    # --------------- write output --------------- #
-    out_name = f"v1_{args.param_string}_annotations.json" if args.param_string else "final_annotations.json"
-    out_file = out_root / out_name
-    out_file.write_text(json.dumps(final_ann, indent=2))
-    logging.info("Annotations written → %s", out_file)
+        # Write output for this slide
+        out_name = f"v1_{args.param_string}_annotations.json" if args.param_string else "final_annotations.json"
+        out_file = slide_out_dir / out_name
+        out_file.write_text(json.dumps(final_ann, indent=2))
+        logging.info("Annotations for slide %s written → %s", slide_name, out_file)
 
 # ──────────────────────────────────────────────────────────────── #
 if __name__ == "__main__":

@@ -439,7 +439,7 @@ def build_components(
         filtered_use_text = filtered_annotation_text_use_pred_class or filtered_annotation_text_use_cluster_id or filtered_annotation_text_use_cluster_confidence
         filtered_annotation_cmd = (
             "python annotate_images.py "
-            "--json_file ${{inputs.cluster_tiles_path}}/filtered_annotations.json "
+            "--json_dir ${{inputs.cluster_tiles_path}} "
             "--images_dir ${{inputs.prepped_tiles_path}} "
             "--output_dir ${{outputs.output_path}} "
             f"--max_labels {filtered_annotation_max_labels} "
