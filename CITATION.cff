@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "edu06_histology_labelling: Azure ML pipeline for automated histology image analysis"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: "AHMAD"
+    given-names: "MUHAMMAD HASEEB"
+    orcid: "https://orcid.org/0009-0001-4771-2721"
+    affiliation: "University of Oxford Department of Engineering Science"
+license: MIT
+repository-code: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
+url: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
+abstract: >
+  An Azure ML pipeline for automated histology image analysis combining 
+  cell segmentation (Cellpose), feature clustering (DBSCAN/UMAP), and 
+  AI-powered classification (GPT-4o vision). Includes smart tile filtering 
+  for improved processing efficiency.
+keywords:
+  - histology
+  - cell-segmentation
+  - machine-learning
+  - azure-ml
+  - cellpose
+  - gpt-4o
+  - image-analysis
+  - medical-imaging
+version: "0.1.0"
+date-released: "2026-01-14"
+# doi: ""  # Add Zenodo DOI after minting

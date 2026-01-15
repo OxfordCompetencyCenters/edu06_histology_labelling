@@ -10,6 +10,8 @@ __pycache__/
 # Virtual environment folders
 env/
 venv/
+.conda/
+conda-env/
 
 # Ignore system files
 .DS_Store
@@ -24,3 +26,78 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+*.code-workspace
+
+# =============================================================================
+# SECURITY - Credentials and Secrets (CRITICAL)
+# =============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# Azure configuration with secrets
+config.yaml
+config.yml
+config.local.yaml
+
+# =============================================================================
+# Data and Outputs (typically large files)
+# =============================================================================
+# WSI and image data
+*.svs
+*.tif
+*.tiff
+*.ndpi
+*.mrxs
+*.vsi
+*.scn
+*.bif
+
+# Output directories
+outputs/
+results/
+Data/
+tiles/
+processed/
+
+# Large model files
+*.pt
+*.pth
+*.onnx
+*.h5
+*.pkl
+models/
+
+# =============================================================================
+# Azure ML
+# =============================================================================
+.azureml/
+azureml-models/
+*.amlignore
+
+# =============================================================================
+# Build and Distribution
+# =============================================================================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =============================================================================
+# Testing and Coverage
+# =============================================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# =============================================================================
+# Documentation builds
+# =============================================================================
+docs/_build/
+site/
