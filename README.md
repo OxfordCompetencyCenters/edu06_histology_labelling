@@ -34,7 +34,7 @@ The segmentation and clustering components demonstrate strong performance across
 
 ## Pipeline Architecture
 
-![Pipeline Architecture](azureml_pipeline/images/Pipeline%20design%20-%20transparent%20background.svg)
+![Pipeline Architecture](azureml_pipeline/images/Pipeline%20design%20-%20white%20background.svg)
 
 <details>
 <summary>Text-based diagram (click to expand)</summary>
@@ -231,6 +231,15 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 
 ## Pipeline Parameters
 
+### Input/Output URIs
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--raw_slides_uri` | `"azureml://..."` | URI to raw WSI slides (for `full` and `prep_only` modes) |
+| `--prepped_data_uri` | `"azureml://..."` | URI to prepped tiles (for `seg_cluster_cls`, `cluster_cls`, `classify_only`, `annotate_only`, etc.) |
+| `--segmented_data_uri` | `"azureml://..."` | URI to segmented data (for `cluster_cls` and `classify_only` modes) |
+| `--clustered_data_uri` | `"azureml://..."` | URI to clustered data (for `classify_only` mode) |
+| `--postprocess_data_uri` | `"azureml://..."` | URI to post-processed results (for `annotate_only`, `extract_cluster_tiles_only`, etc.) |
+
 ### Data Preparation
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -254,31 +263,48 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--segment_model_type` | `"cellpose_sam"` | Model: `cyto`, `cyto2`, `cyto3`, `nuclei`, `cellpose_sam`, etc. |
 | `--segment_flow_threshold` | `0.4` | Flow threshold (lower = stricter shape filtering) |
 | `--segment_cellprob_threshold` | `0.0` | Cell probability threshold (higher = stricter cell detection) |
-| `--segment_use_gpu` | `False` | Enable GPU acceleration |
+| `--segment_use_gpu` | `True` | Enable GPU acceleration |
 | `--segment_diameter` | `None` | Expected cell diameter in pixels (auto-estimated if None) |
+| `--segment_resample` | `False` | Enable resampling for better segmentation of variable-sized objects |
 | `--segment_normalize` | `True` | Normalize images before segmentation |
+| `--segment_do_3D` | `False` | Enable 3D segmentation (for Z-stacks) |
+| `--segment_stitch_threshold` | `0.0` | Threshold for stitching masks across tiles (0.0 = no stitching) |
 | `--segment_channels` | `"2,1"` | Channel specification: cytoplasm,nucleus |
+| `--segment_use_cellpose_sam` | `False` | Use Cellpose-SAM for enhanced generalization |
 
 ### Clustering (ResNet-50 → UMAP → DBSCAN)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--cluster_eps` | `None` | DBSCAN epsilon/neighborhood radius (auto-computed if None) |
 | `--cluster_min_samples` | `5` | Minimum samples for DBSCAN core point |
-| `--cluster_use_gpu` | `False` | Enable GPU acceleration via RAPIDS cuML |
+| `--cluster_use_gpu` | `True` | Enable GPU acceleration via RAPIDS cuML |
 | `--cluster_normalize` | `False` | Normalize ResNet-50 embeddings before clustering |
 | `--cluster_use_umap` | `False` | Enable UMAP dimensionality reduction (2048→50) |
 | `--cluster_umap_components` | `50` | Number of UMAP output dimensions |
 | `--cluster_umap_neighbors` | `15` | UMAP n_neighbors parameter |
 | `--cluster_umap_min_dist` | `0.1` | UMAP min_dist parameter |
+| `--cluster_umap_metric` | `"euclidean"` | Distance metric for UMAP |
 | `--cluster_per_slide` | `False` | Cluster each slide separately vs. globally |
+| `--cluster_slide_folders` | `None` | Specific slide folder names to process (when using `--cluster_per_slide`) |
+
+### Classification (GPT-4o)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--classify_per_cluster` | `10` | Number of cells to classify per cluster (set to 0 to skip classification) |
 
 ### Annotation
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--enable_annotations` | `False` | Enable image annotation generation |
 | `--annotation_max_labels` | `100` | Maximum labels per image |
+| `--annotation_random_labels` | `False` | Pick labels randomly up to max_labels |
 | `--annotation_draw_polygon` | `True` | Draw cell boundary polygons |
 | `--annotation_draw_bbox` | `False` | Draw bounding boxes |
+| `--annotation_no_text` | `True` | Do not draw text labels |
+| `--annotation_text_use_pred_class` | `False` | Include predicted class in text labels |
+| `--annotation_text_use_cluster_id` | `False` | Include cluster ID in text labels |
+| `--annotation_text_use_cluster_confidence` | `False` | Include cluster confidence in text labels |
+| `--annotation_text_scale` | `0.5` | Scale factor for text size |
 | `--annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
 | `--annotation_filter_unclassified` | `True` | Filter out unclassified cells |
 
@@ -288,6 +314,24 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--enable_cluster_tiles` | `False` | Enable representative tile extraction |
 | `--cluster_analyzer_confidence_threshold` | `0.75` | Minimum cluster confidence for extraction |
 | `--cluster_analyzer_max_items` | `20` | Maximum representative tiles per cluster |
+
+### Filtered Annotation
+Parameters for annotating the representative tiles extracted by the cluster analyzer.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--enable_filtered_annotations` | `False` | Enable annotation of filtered cluster tiles |
+| `--filtered_annotation_max_labels` | `100` | Maximum labels per filtered image |
+| `--filtered_annotation_random_labels` | `False` | Pick labels randomly up to max_labels |
+| `--filtered_annotation_draw_polygon` | `True` | Draw cell boundary polygons |
+| `--filtered_annotation_draw_bbox` | `False` | Draw bounding boxes |
+| `--filtered_annotation_no_text` | `False` | Do not draw text labels |
+| `--filtered_annotation_text_use_pred_class` | `False` | Include predicted class in text labels |
+| `--filtered_annotation_text_use_cluster_id` | `False` | Include cluster ID in text labels |
+| `--filtered_annotation_text_use_cluster_confidence` | `False` | Include cluster confidence in text labels |
+| `--filtered_annotation_text_scale` | `0.5` | Scale factor for text size |
+| `--filtered_annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
+| `--filtered_annotation_filter_unclassified` | `True` | Filter out unclassified cells |
 
 ---
 

@@ -542,7 +542,8 @@ def run_pipeline():
                    help="Cellpose model type [cellpose_sam]. Uses latest SAM-based model with superhuman generalization by default")
     p.add_argument("--segment_flow_threshold", type=float, default=0.4)
     p.add_argument("--segment_cellprob_threshold", type=float, default=0.0)
-    p.add_argument("--segment_use_gpu", action="store_true")
+    p.add_argument("--segment_use_gpu", action="store_true", default=True,
+                   help="Use GPU for segmentation (default: True for V100)")
     p.add_argument("--segment_diameter", type=float, default=None,
                    help="Expected cell diameter in pixels. If None, cellpose will estimate automatically")
     p.add_argument("--segment_resample", action="store_true",
@@ -561,7 +562,8 @@ def run_pipeline():
     # Clustering
     p.add_argument("--cluster_eps", type=float, default=None)
     p.add_argument("--cluster_min_samples", type=int, default=5)
-    p.add_argument("--cluster_use_gpu", action="store_true")
+    p.add_argument("--cluster_use_gpu", action="store_true", default=True,
+                   help="Use GPU for clustering (default: True for V100)")
     p.add_argument("--cluster_normalize", action="store_true")
     p.add_argument("--cluster_use_umap", action="store_true")
     p.add_argument("--cluster_umap_components", type=int, default=50)
