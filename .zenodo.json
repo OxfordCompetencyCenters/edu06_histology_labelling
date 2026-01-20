@@ -1,0 +1,30 @@
+{
+  "title": "edu06_histology_labelling: Azure ML pipeline for automated histology image analysis",
+  "upload_type": "software",
+  "description": "Azure ML pipeline for automated histology image analysis combining cell segmentation (Cellpose/Cellpose-SAM), neural embedding, dimensionality reduction (UMAP), and unsupervised clustering (DBSCAN), with optional experimental GPT-4o-based cluster labelling.",
+  "creators": [
+    {
+      "name": "Ahmad, Muhammad Haseeb",
+      "orcid": "0009-0001-4771-2721",
+      "affiliation": "University of Oxford"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "histology",
+    "cell segmentation",
+    "whole slide imaging",
+    "machine learning",
+    "Azure Machine Learning",
+    "Cellpose",
+    "UMAP",
+    "DBSCAN"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling",
+      "relation": "isSupplementTo",
+      "resource_type": "software"
+    }
+  ]
+}

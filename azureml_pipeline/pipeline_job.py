@@ -3,19 +3,24 @@ import argparse, logging, os, sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 from azure.ai.ml import MLClient, Input, Output, command
 from azure.ai.ml.entities import Environment
 from azure.ai.ml.constants import AssetTypes
 from azure.ai.ml.dsl import pipeline
 
-# --------------------------------------------------------------------------- #
-# Basic config – edit if your workspace details change
-# --------------------------------------------------------------------------- #
-SUBSCRIPTION_ID  = "bbeb7561-f822-4950-82f6-64dcae8a93ab"
-RESOURCE_GROUP   = "AIMLCC-DEV-RG"
-WORKSPACE_NAME   = "edu06_histology_img_segmentation"
-COMPUTE_CLUSTER  = "edu06-gpu-compute-cluster"
+
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    load_dotenv()
+
+SUBSCRIPTION_ID  = os.getenv("AZURE_SUBSCRIPTION_ID")
+RESOURCE_GROUP   = os.getenv("AZURE_RESOURCE_GROUP")
+WORKSPACE_NAME   = os.getenv("AZURE_ML_WORKSPACE_NAME")
+COMPUTE_CLUSTER  = os.getenv("AZURE_ML_COMPUTE_CLUSTER", "gpu-cluster")
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -28,7 +33,6 @@ def format_param_for_name(value):
         return f"{value}".replace(".", "pt")
     if isinstance(value, bool):
         return "T" if value else "F"
-    # strings (e.g. magnification list)
     return str(value).replace(".", "pt").replace(",", "-")
 
 def build_param_string(args):
@@ -39,6 +43,7 @@ def build_param_string(args):
     # For cluster tiles and filtered annotations only modes
     if mode in ["extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"]:
         if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
+            # reptiles = representative tiles
             parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
             if args.cluster_analyzer_max_items is not None:
                 parts.append(f"maxper_{args.cluster_analyzer_max_items}")
@@ -331,7 +336,8 @@ def build_components(
         environment=env,
     )
 
-    classify_env = {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]}
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    classify_env = {"OPENAI_API_KEY": openai_api_key} if openai_api_key else {}
     cls_cmd = (
         "python classify.py "
         "--segmented_path ${{inputs.segmented_path}} "
@@ -500,7 +506,7 @@ def run_pipeline():
     ], default="full")
 
     # Input URIs
-    p.add_argument("--raw_slides_uri", default="azureml://datastores/workspaceblobstore/paths/UI/2025-03-05_125751_UTC/")
+    p.add_argument("--raw_slides_uri", default="azureml://datastores/workspaceblobstore/paths/your_slides/")
     p.add_argument("--prepped_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/")
     p.add_argument("--segmented_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/")
     p.add_argument("--clustered_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/")
@@ -629,6 +635,7 @@ def run_pipeline():
                    help="Filter out unclassified cells for filtered annotations")
 
     args = p.parse_args()
+    validate_environment(args)
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
     logging.info("Args: %s", vars(args))
@@ -916,7 +923,7 @@ def run_pipeline():
     # ------------- Pick + submit ------------- #
     mode = args.mode
     logging.info("Submitting mode: %s", mode)
-    exp_name = f"v4_{mode}_{param_string}_{timestamp}"
+    exp_name = f"v1_{mode}_{param_string}_{timestamp}"
 
     job = None
     if mode == "prep_only":
@@ -969,8 +976,27 @@ def run_pipeline():
     print("View in studio:", submitted.studio_url)
 
 # --------------------------------------------------------------------------- #
+def validate_environment(args: argparse.Namespace):
+    """Validate that all required environment variables are set."""
+    missing = []
+    
+    if not SUBSCRIPTION_ID:
+        missing.append("AZURE_SUBSCRIPTION_ID")
+    if not RESOURCE_GROUP:
+        missing.append("AZURE_RESOURCE_GROUP")
+    if not WORKSPACE_NAME:
+        missing.append("AZURE_ML_WORKSPACE_NAME")
+
+    mode_requires_openai = args.mode in {"full", "seg_cluster_cls", "cluster_cls", "classify_only"}
+    if mode_requires_openai and not os.getenv("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY")
+    
+    if missing:
+        raise EnvironmentError(
+            f"Missing required environment variables: {', '.join(missing)}\n"
+            f"Please create a .env file based on .env.example and fill in your values."
+        )
+
+# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("OPENAI_API_KEY not set!")
     run_pipeline()

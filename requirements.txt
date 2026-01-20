@@ -1,0 +1,11 @@
+# Local development dependencies for submitting Azure ML pipeline jobs
+# Install with: pip install -r requirements.txt
+
+# Azure ML SDK v2 - for pipeline definition and job submission
+azure-ai-ml>=1.12.0
+
+# Azure authentication
+azure-identity>=1.14.0
+
+# Environment variable management
+python-dotenv>=1.0.0

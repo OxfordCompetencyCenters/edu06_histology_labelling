@@ -6,7 +6,7 @@ authors:
   - family-names: "AHMAD"
     given-names: "MUHAMMAD HASEEB"
     orcid: "https://orcid.org/0009-0001-4771-2721"
-    affiliation: "University of Oxford Department of Engineering Science"
+    affiliation: "University of Oxford"
 license: MIT
 repository-code: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
 url: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
