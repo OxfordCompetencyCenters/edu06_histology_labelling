@@ -36,34 +36,6 @@ The segmentation and clustering components demonstrate strong performance across
 
 ![Pipeline Architecture](azureml_pipeline/images/Pipeline%20design%20-%20white%20background.svg)
 
-<details>
-<summary>Text-based diagram (click to expand)</summary>
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────────┐    ┌─────────────────────┐
-│   Slides    │───▶│   Tiling    │───▶│ Quality Filter  │───▶│ Segmentation        │
-│   (WSI)     │    │ (512×512)   │    │ (edge/bright/   │    │ (Cellpose-SAM)      │
-└─────────────┘    └─────────────┘    │  dark removal)  │    └──────────┬──────────┘
-                                      └─────────────────┘               │
-                                                                        ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              CLUSTERING PIPELINE                                 │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │ Cell Crops   │───▶│  ResNet-50   │───▶│    UMAP      │───▶│   DBSCAN     │  │
-│  │ from Masks   │    │  Embedding   │    │  (2048→50)   │    │  Clustering  │  │
-│  └──────────────┘    │  (2048-dim)  │    └──────────────┘    └──────────────┘  │
-│                      └──────────────┘                                           │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                                                        │
-                                                                        ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ Classification  │───▶│ Post-process    │───▶│ Representative  │───▶│ Annotated   │
-│ (GPT-4o)        │    │ (JSON export)   │    │ Tile Filter     │    │ Images      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────┘
-```
-
-</details>
-
 ## Features
 
 ### The Power of Cluster-Based Visualization
