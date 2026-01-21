@@ -69,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", type=str, help="Path to prepped data (tiled images).")
     parser.add_argument("--output_path", type=str, help="Path for segmentation output.")
-    parser.add_argument("--model_type", type=str, default="cellpose_sam", 
+    parser.add_argument("--pretrained_model", type=str, default="pretrained_model", 
                        help="Cellpose model type.")
     parser.add_argument("--channels", type=str, default="2,1", 
                        help="Comma-separated channel specification.")
@@ -106,22 +106,14 @@ def main():
         logging.error(f"Invalid channel specification '{args.channels}': {e}")
         return
 
-    logging.info(f"Initializing Cellpose model of type: {args.model_type}")
+    logging.info(f"Initializing Cellpose model of type: {args.pretrained_model}")
     
     try:
-        if args.model_type == "cellpose_sam":
-            model = models.CellposeSAM(model_type="sam_vit_b", gpu=args.segment_use_gpu)
-        else:
-            model = models.CellposeModel(model_type=args.model_type, gpu=args.segment_use_gpu)
-        logging.info(f"Successfully loaded model: {args.model_type}")
+        model = models.CellposeModel(pretrained_model=args.pretrained_model, gpu=args.segment_use_gpu)
+        logging.info(f"Successfully loaded model: {args.pretrained_model}")
     except Exception as e:
-        logging.error(f"Failed to load model '{args.model_type}': {e}")
+        logging.error(f"Failed to load model '{args.pretrained_model}': {e}")
         logging.info("Falling back to cyto2 model")
-        try:
-            model = models.CellposeModel(model_type="cyto2", gpu=args.segment_use_gpu)
-        except Exception as e2:
-            logging.error(f"Failed to load fallback cyto2 model: {e2}")
-            raise
     
     logging.info(f"Using GPU: {args.segment_use_gpu}")
     logging.info(f"Using channels: {channels}")

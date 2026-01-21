@@ -44,7 +44,7 @@ tile_filter:
 # =============================================================================
 segmentation:
   # Cellpose model type: "cyto", "cyto2", "nuclei"
-  model_type: "cyto2"
+  pretrained_model: "cyto2"
   
   # Cell probability threshold
   cell_prob_threshold: 0.0

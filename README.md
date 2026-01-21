@@ -28,7 +28,7 @@ This pipeline combines multiple AI techniques to identify cells and group them b
 2. **Neural Embedding** (ResNet-50) - Converts segmented cell images into 2048-dimensional feature vectors
 3. **Dimensionality Reduction** (UMAP) - Reduces embeddings to 50 dimensions while preserving structure
 4. **Clustering** (DBSCAN) - Groups morphologically similar cells across tiles/slides
-5. **Classification** (GPT-4o) - Labels representative cells from each cluster (experimental)
+5. **Classification** (Multimodal LLMs) - Labels representative cells from each cluster (experimental)
 
 The segmentation and clustering components demonstrate strong performance across many tissue types, while classification remains an area for future improvement.
 
@@ -43,7 +43,6 @@ The segmentation and clustering components demonstrate strong performance across
 When exploring a clustered slide, **every cell is color-coded by its cluster**. This transforms how you interact with histology images:
 
 - **See structure at a glance**: Zoom into any region and immediately see which cells are morphologically similar—they share the same color
-- **No cross-referencing needed**: You don't have to look up "what does a beta cell look like?" in a textbook, then scan the slide trying to spot one. Instead, all beta cells (or any cell type) are already visually grouped
 - **Discover patterns**: Clusters reveal spatial organization you might miss when viewing unlabeled images—cell type distributions, tissue boundaries, and regional variations become obvious
 - **Efficient labeling**: Once you identify what a cluster represents, that label can be applied to every cell in that cluster across the slide
 
@@ -54,7 +53,7 @@ When exploring a clustered slide, **every cell is color-coded by its cluster**. 
 - **Neural Embedding**: ResNet-50 backbone converts cell crops to 2048-dimensional feature vectors
 - **Dimensionality Reduction**: UMAP reduces embeddings to 50 dimensions while preserving morphological relationships
 - **Clustering**: DBSCAN groups similar cells with GPU acceleration via RAPIDS cuML
-- **Classification**: GPT-4o vision model labels representative cells (experimental)
+- **Classification**: Multimodal LLM labels representative cells (experimental)
 - **Post-processing**: Aggregates results into structured JSON for downstream tools (e.g., CSlide)
 
 ### Annotation & Analysis
@@ -137,14 +136,7 @@ Upload your WSI files to your Azure ML workspace's blob storage datastore, then 
 ### Azure authentication (required to submit jobs)
 This script submits jobs to **Azure Machine Learning**, so you must be authenticated to Azure and have access to the target workspace.
 
-Also ensure your `.env` contains the required values checked by the script:
-
-- `AZURE_SUBSCRIPTION_ID`
-- `AZURE_RESOURCE_GROUP`
-- `AZURE_ML_WORKSPACE_NAME`
-- `OPENAI_API_KEY`
-
-### Full Pipeline (recommended)
+### Full Pipeline
 ```bash
 python azureml_pipeline/pipeline_job.py --mode full \
     --segment_use_gpu \
@@ -232,7 +224,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 ### Segmentation (Cellpose)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--segment_model_type` | `"cellpose_sam"` | Model: `cyto`, `cyto2`, `cyto3`, `nuclei`, `cellpose_sam`, etc. |
+| `--segment_pretrained_model` | `"pretrained_model"` | Model: `cyto`, `cyto2`, `cyto3`, `nuclei`, `pretrained_model`, etc. |
 | `--segment_flow_threshold` | `0.4` | Flow threshold (lower = stricter shape filtering) |
 | `--segment_cellprob_threshold` | `0.0` | Cell probability threshold (higher = stricter cell detection) |
 | `--segment_use_gpu` | `True` | Enable GPU acceleration |
@@ -242,7 +234,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--segment_do_3D` | `False` | Enable 3D segmentation (for Z-stacks) |
 | `--segment_stitch_threshold` | `0.0` | Threshold for stitching masks across tiles (0.0 = no stitching) |
 | `--segment_channels` | `"2,1"` | Channel specification: cytoplasm,nucleus |
-| `--segment_use_cellpose_sam` | `False` | Use Cellpose-SAM for enhanced generalization |
+| `--segment_use_pretrained_model` | `False` | Use Cellpose-SAM for enhanced generalization |
 
 ### Clustering (ResNet-50 → UMAP → DBSCAN)
 | Parameter | Default | Description |
@@ -376,7 +368,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- [Oxford AI Competency Center](https://oerc.ox.ac.uk/ai-centre) for supporting this research
+- [Damion Young](https://www.medsci.ox.ac.uk/for-staff/staff/damion-young) and [Sharmila Rajendran](https://www.medsci.ox.ac.uk/for-staff/resources/educational-strategy-and-quality-assurance/teaching-excellence-awards/teaching-excellence-awards-2025) from [University of Oxford Medical Sciences Division](https://www.medsci.ox.ac.uk/) for ideating and formulating the research problem.
+- [University of Oxford AI Competency Center](https://oerc.ox.ac.uk/ai-centre) for supporting this research
 - [Cellpose](https://github.com/MouseLand/cellpose) for cell segmentation (including Cellpose-SAM)
 - [OpenAI](https://openai.com/) for GPT-4o vision capabilities
 - [RAPIDS](https://rapids.ai/) for GPU-accelerated clustering (cuML DBSCAN)

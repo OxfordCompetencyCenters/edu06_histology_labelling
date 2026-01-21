@@ -84,14 +84,14 @@ def build_param_string(args):
     # For all other modes (full pipeline parameters)
     else:
         parts = [
-            f"model_{format_param_for_name(args.segment_model_type)}",
+            f"model_{format_param_for_name(args.segment_pretrained_model)}",
             f"prob_{format_param_for_name(args.segment_cellprob_threshold)}",
             f"flow_{format_param_for_name(args.segment_flow_threshold)}",
             f"eps_{format_param_for_name(args.cluster_eps)}",
             f"mins_{args.cluster_min_samples}",
         ]
-        if args.segment_use_cellpose_sam:
-            parts.append("cellpose_sam")
+        if args.segment_use_pretrained_model:
+            parts.append("pretrained_model")
         if args.segment_use_gpu:
             parts.append("segGPU")
         if args.segment_diameter is not None:
@@ -184,7 +184,7 @@ def build_components(
     filter_min_std_intensity: float,
     filter_min_laplacian_var: float,
     filter_min_color_variance: float,
-    segment_model_type: str,
+    segment_pretrained_model: str,
     segment_flow_threshold: float,
     segment_cellprob_threshold: float,
     segment_use_gpu: bool,
@@ -194,7 +194,7 @@ def build_components(
     segment_do_3D: bool,
     segment_stitch_threshold: float,
     segment_channels: str,
-    segment_use_cellpose_sam: bool,
+    segment_use_pretrained_model: bool,
     cluster_eps: float | None,
     cluster_min_samples: int,
     cluster_use_gpu: bool,
@@ -284,13 +284,13 @@ def build_components(
         )
 
     # Determine model type (cellpose-sam takes precedence)
-    model_type = "cellpose_sam" if segment_use_cellpose_sam else segment_model_type
+    pretrained_model = "pretrained_model" if segment_use_pretrained_model else segment_pretrained_model
     
     seg_cmd = (
         "python segment.py "
         "--input_path ${{inputs.prepped_tiles_path}} "
         "--output_path ${{outputs.output_path}} "
-        f"--model_type {model_type} "
+        f"--pretrained_model {pretrained_model} "
         f"--channels {segment_channels} "
         f"--flow_threshold {segment_flow_threshold} "
         f"--cellprob_threshold {segment_cellprob_threshold} "
@@ -536,10 +536,10 @@ def run_pipeline():
     p.add_argument("--classify_per_cluster", type=int, default=10)
 
     # Segmentation
-    p.add_argument("--segment_model_type", type=str, default="cellpose_sam",
-                   choices=["cyto", "cyto2", "cyto3", "nuclei", "tissuenet", "livecell", "yeast_PhC", "yeast_BF", 
-                           "bact_phase", "bact_fluor", "deepbact", "cyto2_cp3", "cyto2_omni", "cellpose_sam"],
-                   help="Cellpose model type [cellpose_sam]. Uses latest SAM-based model with superhuman generalization by default")
+    p.add_argument("--segment_pretrained_model", type=str, default="pretrained_model",
+                   choices=["cpsam", "cyto", "cyto2", "cyto3", "nuclei", "tissuenet", "livecell", "yeast_PhC", "yeast_BF", 
+                           "bact_phase", "bact_fluor", "deepbact", "cyto2_cp3", "cyto2_omni", "pretrained_model"],
+                   help="Cellpose model type [pretrained_model]. Uses latest SAM-based model with superhuman generalization by default")
     p.add_argument("--segment_flow_threshold", type=float, default=0.4)
     p.add_argument("--segment_cellprob_threshold", type=float, default=0.0)
     p.add_argument("--segment_use_gpu", action="store_true", default=True,
@@ -556,8 +556,8 @@ def run_pipeline():
                    help="Threshold for stitching masks across tiles (0.0 = no stitching)")
     p.add_argument("--segment_channels", type=str, default="2,1",
                    help="Comma-separated channel specification: 'cytoplasm_channel,nucleus_channel' (e.g., '2,1' or '0,0' for grayscale)")
-    p.add_argument("--segment_use_cellpose_sam", action="store_true",
-                   help="Use Cellpose-SAM for enhanced generalization (automatically sets model to cellpose_sam)")
+    p.add_argument("--segment_use_pretrained_model", action="store_true",
+                   help="Use Cellpose-SAM for enhanced generalization (automatically sets model to pretrained_model)")
 
     # Clustering
     p.add_argument("--cluster_eps", type=float, default=None)
@@ -700,7 +700,7 @@ def run_pipeline():
         filter_min_laplacian_var=args.filter_min_laplacian_var,
         filter_min_color_variance=args.filter_min_color_variance,
         # segmentation
-        segment_model_type=args.segment_model_type,
+        segment_pretrained_model=args.segment_pretrained_model,
         segment_flow_threshold=args.segment_flow_threshold,
         segment_cellprob_threshold=args.segment_cellprob_threshold,
         segment_use_gpu=args.segment_use_gpu,
@@ -710,7 +710,7 @@ def run_pipeline():
         segment_do_3D=args.segment_do_3D,
         segment_stitch_threshold=args.segment_stitch_threshold,
         segment_channels=args.segment_channels,
-        segment_use_cellpose_sam=args.segment_use_cellpose_sam,
+        segment_use_pretrained_model=args.segment_use_pretrained_model,
         # clustering
         cluster_eps=args.cluster_eps,
         cluster_min_samples=args.cluster_min_samples,
