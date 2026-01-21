@@ -224,7 +224,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 ### Segmentation (Cellpose)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--segment_pretrained_model` | `"pretrained_model"` | Model: `cyto`, `cyto2`, `cyto3`, `nuclei`, `pretrained_model`, etc. |
+| `--segment_pretrained_model` | `"cpsam"` | Cellpose pretrained model name: `cpsam` (Cellpose-SAM), `cyto`, `cyto2`, `cyto3`, `nuclei`, etc. |
 | `--segment_flow_threshold` | `0.4` | Flow threshold (lower = stricter shape filtering) |
 | `--segment_cellprob_threshold` | `0.0` | Cell probability threshold (higher = stricter cell detection) |
 | `--segment_use_gpu` | `True` | Enable GPU acceleration |
@@ -233,8 +233,6 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--segment_normalize` | `True` | Normalize images before segmentation |
 | `--segment_do_3D` | `False` | Enable 3D segmentation (for Z-stacks) |
 | `--segment_stitch_threshold` | `0.0` | Threshold for stitching masks across tiles (0.0 = no stitching) |
-| `--segment_channels` | `"2,1"` | Channel specification: cytoplasm,nucleus |
-| `--segment_use_pretrained_model` | `False` | Use Cellpose-SAM for enhanced generalization |
 
 ### Clustering (ResNet-50 → UMAP → DBSCAN)
 | Parameter | Default | Description |

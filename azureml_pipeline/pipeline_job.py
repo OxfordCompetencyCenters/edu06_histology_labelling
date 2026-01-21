@@ -90,8 +90,6 @@ def build_param_string(args):
             f"eps_{format_param_for_name(args.cluster_eps)}",
             f"mins_{args.cluster_min_samples}",
         ]
-        if args.segment_use_pretrained_model:
-            parts.append("pretrained_model")
         if args.segment_use_gpu:
             parts.append("segGPU")
         if args.segment_diameter is not None:
@@ -193,8 +191,6 @@ def build_components(
     segment_normalize: bool,
     segment_do_3D: bool,
     segment_stitch_threshold: float,
-    segment_channels: str,
-    segment_use_pretrained_model: bool,
     cluster_eps: float | None,
     cluster_min_samples: int,
     cluster_use_gpu: bool,
@@ -283,15 +279,11 @@ def build_components(
             environment=env,
         )
 
-    # Determine model type (cellpose-sam takes precedence)
-    pretrained_model = "pretrained_model" if segment_use_pretrained_model else segment_pretrained_model
-    
     seg_cmd = (
         "python segment.py "
         "--input_path ${{inputs.prepped_tiles_path}} "
         "--output_path ${{outputs.output_path}} "
-        f"--pretrained_model {pretrained_model} "
-        f"--channels {segment_channels} "
+        f"--pretrained_model {segment_pretrained_model} "
         f"--flow_threshold {segment_flow_threshold} "
         f"--cellprob_threshold {segment_cellprob_threshold} "
         f"{'--segment_use_gpu ' if segment_use_gpu else ''}"
@@ -536,10 +528,9 @@ def run_pipeline():
     p.add_argument("--classify_per_cluster", type=int, default=10)
 
     # Segmentation
-    p.add_argument("--segment_pretrained_model", type=str, default="pretrained_model",
+    p.add_argument("--segment_pretrained_model", type=str, default="cpsam",
                    choices=["cpsam", "cyto", "cyto2", "cyto3", "nuclei", "tissuenet", "livecell", "yeast_PhC", "yeast_BF", 
-                           "bact_phase", "bact_fluor", "deepbact", "cyto2_cp3", "cyto2_omni", "pretrained_model"],
-                   help="Cellpose model type [pretrained_model]. Uses latest SAM-based model with superhuman generalization by default")
+                           "bact_phase", "bact_fluor", "deepbact", "cyto2_cp3", "cyto2_omni"])
     p.add_argument("--segment_flow_threshold", type=float, default=0.4)
     p.add_argument("--segment_cellprob_threshold", type=float, default=0.0)
     p.add_argument("--segment_use_gpu", action="store_true", default=True,
@@ -554,10 +545,6 @@ def run_pipeline():
                    help="Enable 3D segmentation (for Z-stacks)")
     p.add_argument("--segment_stitch_threshold", type=float, default=0.0,
                    help="Threshold for stitching masks across tiles (0.0 = no stitching)")
-    p.add_argument("--segment_channels", type=str, default="2,1",
-                   help="Comma-separated channel specification: 'cytoplasm_channel,nucleus_channel' (e.g., '2,1' or '0,0' for grayscale)")
-    p.add_argument("--segment_use_pretrained_model", action="store_true",
-                   help="Use Cellpose-SAM for enhanced generalization (automatically sets model to pretrained_model)")
 
     # Clustering
     p.add_argument("--cluster_eps", type=float, default=None)
@@ -709,8 +696,6 @@ def run_pipeline():
         segment_normalize=args.segment_normalize,
         segment_do_3D=args.segment_do_3D,
         segment_stitch_threshold=args.segment_stitch_threshold,
-        segment_channels=args.segment_channels,
-        segment_use_pretrained_model=args.segment_use_pretrained_model,
         # clustering
         cluster_eps=args.cluster_eps,
         cluster_min_samples=args.cluster_min_samples,

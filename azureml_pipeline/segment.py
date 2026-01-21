@@ -7,7 +7,7 @@ from PIL import Image
 from cellpose import models
 import logging
 
-def segment_and_extract_bboxes(img_path, model, out_dir, channels, flow_threshold=0.4, 
+def segment_and_extract_bboxes(img_path, model, out_dir, flow_threshold=0.4, 
                                cellprob_threshold=0.0, diameter=None, resample=True, 
                                normalize=True, do_3D=False, stitch_threshold=0.0):
     """
@@ -20,8 +20,7 @@ def segment_and_extract_bboxes(img_path, model, out_dir, channels, flow_threshol
     logging.info(f"Segmenting tile: {img_path} with flow_threshold={flow_threshold}, cellprob_threshold={cellprob_threshold}")
 
     masks, flows, diams = model.eval(
-        img, 
-        channels=channels,
+        img,
         flow_threshold=flow_threshold,
         cellprob_threshold=cellprob_threshold,
         diameter=diameter,
@@ -69,10 +68,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", type=str, help="Path to prepped data (tiled images).")
     parser.add_argument("--output_path", type=str, help="Path for segmentation output.")
-    parser.add_argument("--pretrained_model", type=str, default="pretrained_model", 
-                       help="Cellpose model type.")
-    parser.add_argument("--channels", type=str, default="2,1", 
-                       help="Comma-separated channel specification.")
+    parser.add_argument("--pretrained_model", type=str, default="cpsam", 
+                       help="Cellpose pretrained model name (e.g., cpsam, cyto, cyto2, cyto3, nuclei).")
     parser.add_argument("--flow_threshold", type=float, default=0.4, 
                        help="Flow threshold for segmentation confidence.")
     parser.add_argument("--cellprob_threshold", type=float, default=0.0,
@@ -98,14 +95,6 @@ def main():
 
     normalize = args.normalize and not args.no_normalize
 
-    try:
-        channels = [int(c) for c in args.channels.split(',')]
-        if len(channels) != 2:
-            raise ValueError("Must specify exactly 2 channels")
-    except ValueError as e:
-        logging.error(f"Invalid channel specification '{args.channels}': {e}")
-        return
-
     logging.info(f"Initializing Cellpose model of type: {args.pretrained_model}")
     
     try:
@@ -116,7 +105,6 @@ def main():
         logging.info("Falling back to cyto2 model")
     
     logging.info(f"Using GPU: {args.segment_use_gpu}")
-    logging.info(f"Using channels: {channels}")
     logging.info(f"Normalization: {normalize}")
     logging.info(f"Diameter: {args.diameter}")
     logging.info(f"Resample: {args.resample}")
@@ -136,7 +124,6 @@ def main():
             tile_file, 
             model, 
             tile_out_dir, 
-            channels, 
             args.flow_threshold, 
             args.cellprob_threshold,
             args.diameter,
