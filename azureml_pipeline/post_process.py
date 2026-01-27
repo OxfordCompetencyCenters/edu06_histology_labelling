@@ -166,7 +166,7 @@ def main():
         for tile in classification_results:
             tile_path = tile["tile_path"]
             tile_name = tile["tile_name"]
-            current_slide_name = tile["slide_name"]
+            current_slide_name = tile["slide_id"]
 
             meta = parse_tile_meta(tile_name)
             if meta is None:

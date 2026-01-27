@@ -92,9 +92,9 @@ def get_tile_info(bbox_file, prepped_tiles_path):
         return None, None, None
 
 
-def classify_bbox_gpt4o(client, tile_image, bbox):
+def classify_bbox_multimodal_llm(client, tile_image, bbox):
     """
-    Classify a single cell image region using GPT-4o.
+    Classify a single cell image region using multimodal-LLM.
     """
     try:
         cropped_img = tile_image.crop(bbox)
@@ -147,7 +147,7 @@ def classify_bbox_gpt4o(client, tile_image, bbox):
         logging.error(f"OpenAI API Error during classification: {e}")
         return f"Error - API Error: {e}"
     except Exception as e:
-        logging.error(f"Unexpected error during GPT-4o classification for bbox {bbox}: {e}")
+        logging.error(f"Unexpected error during multimodal_llm classification for bbox {bbox}: {e}")
         return "Error - Exception"
 
 
@@ -167,7 +167,7 @@ def main():
                         help="Number of bounding boxes to classify per cluster (per slide), from highest to lowest confidence.")
     args = parser.parse_args()
 
-    logging.info("Starting GPT-4o classification with arguments: %s", args)
+    logging.info("Starting multimodal-LLM classification with arguments: %s", args)
     os.makedirs(args.output_path, exist_ok=True)
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -200,13 +200,13 @@ def main():
             top_n = sorted_entries[: args.classify_per_cluster]
             selected_bboxes_for_classification.extend(top_n)
 
-        logging.info(f"Selected a total of {len(selected_bboxes_for_classification)} bounding boxes across all clusters/slides for GPT-4o classification.")
+        logging.info(f"Selected a total of {len(selected_bboxes_for_classification)} bounding boxes across all clusters/slides for multimodal-LLM classification.")
 
         ids_to_classify = set(
             (entry["bbox_file"], entry["label_id"]) for entry in selected_bboxes_for_classification
         )
 
-        gpt_predictions = {}
+        multimodal_llm_predictions = {}
 
         bboxes_grouped_by_tile = defaultdict(list)
         for entry in selected_bboxes_for_classification:
@@ -223,7 +223,7 @@ def main():
                 logging.warning(f"Tile image not found at {tile_path} (referenced by {entries_in_tile[0]['bbox_file']}). Skipping classification for {len(entries_in_tile)} cells in this tile.")
                 for entry in entries_in_tile:
                      cell_id = (entry["bbox_file"], entry["label_id"])
-                     gpt_predictions[cell_id] = "Error - Tile Not Found"
+                     multimodal_llm_predictions[cell_id] = "Error - Tile Not Found"
                 continue
 
             try:
@@ -237,15 +237,15 @@ def main():
                     bbox = entry["bbox"]
                     cell_id = (entry["bbox_file"], entry["label_id"])
 
-                    pred_class = classify_bbox_gpt4o(client, tile_img, bbox)
-                    gpt_predictions[cell_id] = pred_class
+                    pred_class = classify_bbox_multimodal_llm(client, tile_img, bbox)
+                    multimodal_llm_predictions[cell_id] = pred_class
 
             except Exception as e:
                 logging.error(f"Error processing tile {tile_path}: {e}. Skipping classification for remaining cells in this tile.")
                 for entry in entries_in_tile:
                      cell_id = (entry["bbox_file"], entry["label_id"])
-                     if cell_id not in gpt_predictions:
-                         gpt_predictions[cell_id] = "Error - Tile Processing Failed"
+                     if cell_id not in multimodal_llm_predictions:
+                         multimodal_llm_predictions[cell_id] = "Error - Tile Processing Failed"
 
         logging.info("Compiling final results for all clustered cells...")
         for entry in all_clustered_cells:
@@ -259,8 +259,8 @@ def main():
                 logging.warning(f"Skipping final result for cell {label_id} from {bbox_file} due to parsing error.")
                 continue
 
-            if cell_id in gpt_predictions:
-                pred_class = gpt_predictions[cell_id]
+            if cell_id in multimodal_llm_predictions:
+                pred_class = multimodal_llm_predictions[cell_id]
             else:
                 pred_class = "Unclassified"
 
@@ -321,7 +321,7 @@ def main():
                     label_id = bbox_entry["label_id"]
                     bbox = bbox_entry["bbox"]
 
-                    pred_class = classify_bbox_gpt4o(client, tile_img, bbox)
+                    pred_class = classify_bbox_multimodal_llm(client, tile_img, bbox)
 
                     all_cell_results.append({
                         "bbox_file": bbox_file,

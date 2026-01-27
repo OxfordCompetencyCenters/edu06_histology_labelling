@@ -1,7 +1,7 @@
 {
   "title": "edu06_histology_labelling: Azure ML pipeline for automated histology image analysis",
   "upload_type": "software",
-  "description": "Azure ML pipeline for automated histology image analysis combining cell segmentation (Cellpose/Cellpose-SAM), neural embedding, dimensionality reduction (UMAP), and unsupervised clustering (DBSCAN), with optional experimental GPT-4o-based cluster labelling.",
+  "description": "Azure ML pipeline for automated histology image analysis combining cell segmentation (Cellpose/Cellpose-SAM), neural embedding, dimensionality reduction (UMAP), and unsupervised clustering (DBSCAN), with optional experimental multimodal-LLM-based cluster labelling.",
   "creators": [
     {
       "name": "Ahmad, Muhammad Haseeb",

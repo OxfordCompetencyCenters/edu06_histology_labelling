@@ -107,8 +107,8 @@ pip install azure-ai-ml azure-identity python-dotenv
 > **Note**: These are separate from the pipeline component dependencies (defined in `azureml_pipeline/environment.yml`), which are installed in the Azure ML compute environment.
 
 ### API Keys
-- OpenAI API key with GPT-4o access, **OR**
-- Azure OpenAI deployment with GPT-4o
+- OpenAI API key with multimodal-LLM access, **OR**
+- Azure OpenAI deployment with multimodal-LLM
 
 ---
 
@@ -249,7 +249,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--cluster_per_slide` | `False` | Cluster each slide separately vs. globally |
 | `--cluster_slide_folders` | `None` | Specific slide folder names to process (when using `--cluster_per_slide`) |
 
-### Classification (GPT-4o)
+### Classification (multimodal-LLM)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--classify_per_cluster` | `10` | Number of cells to classify per cluster (set to 0 to skip classification) |
@@ -295,6 +295,67 @@ Parameters for annotating the representative tiles extracted by the cluster anal
 | `--filtered_annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
 | `--filtered_annotation_filter_unclassified` | `True` | Filter out unclassified cells |
 
+### Multi-Node Parallelization
+Control how the pipeline distributes work across compute nodes. The pipeline uses a **hybrid parallelization strategy** via Azure ML's `parallel_run_function` that respects the natural granularity of each stage:
+
+| Stage | Default Strategy | Parallel Entry Script | Reason |
+|-------|------------------|----------------------|--------|
+| Data prep | `slide` | `parallel_data_prep.py` | Each WSI file is tiled independently |
+| Tile filtering | `tile` | `parallel_tile_filter.py` | Each tile evaluated independently |
+| Segmentation | `tile` | `parallel_segment.py` | Cellpose processes each tile independently |
+| Clustering | `slide` | `parallel_cluster.py` | Per-slide UMAP + DBSCAN (requires `--cluster_per_slide`) |
+| Classification | `slide` | `parallel_classify.py` | Each slide classified independently |
+| Post-processing | `none` | - | Aggregates per-slide results (single node) |
+| Annotation | `none` | - | Per-slide output files (single node) |
+
+When `--max_nodes > 1`:
+- **Tile-level stages** (filtering, segmentation): Distribute mini-batches of tile files across nodes
+- **Slide-level stages** (data_prep, clustering, classification): Distribute entire slides across nodes
+
+**Note**: Slide-level clustering parallelization requires `--cluster_per_slide` flag, as global clustering needs all embeddings at once.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--max_nodes` | `1` | Maximum number of compute nodes (1 = single node, no parallelization) |
+| `--processes_per_node` | `1` | Number of processes per node (set >1 for multi-GPU nodes) |
+| `--mini_batch_size` | `10` | Number of files per mini-batch for tile-level parallel stages |
+| `--mini_batch_error_threshold` | `5` | Number of failed mini-batches allowed before failing the job |
+| `--max_retries` | `3` | Max retries per mini-batch on failure/timeout (useful for low-priority VMs) |
+| `--retry_timeout` | `300` | Timeout in seconds for each mini-batch retry |
+| `--parallelize_data_prep` | `slide` | Override: `slide` or `none` |
+| `--parallelize_tile_filter` | `tile` | Override: `tile`, `slide`, or `none` |
+| `--parallelize_segment` | `tile` | Override: `tile`, `slide`, or `none` |
+| `--parallelize_cluster` | `slide` | Override: `slide` or `none` (requires `--cluster_per_slide`) |
+| `--parallelize_classify` | `slide` | Override: `slide` or `none` |
+| `--use_separate_clustering_cluster` | `False` | Use a separate compute cluster for clustering (e.g., high-RAM CPU cluster) |
+| `--clustering_use_gpu` | `False` | Use GPU for clustering on the clustering cluster |
+
+#### Example: Multi-Node Full Pipeline (10 nodes)
+```bash
+python azureml_pipeline/pipeline_job.py --mode full \
+    --max_nodes 10 \
+    --cluster_per_slide \
+    --segment_use_gpu \
+    --cluster_use_gpu \
+    --raw_slides_uri "azureml://datastores/workspaceblobstore/paths/your_slides/"
+```
+
+#### Example: Disable parallelization for specific stages
+```bash
+# Run segmentation on single node (for debugging), but parallelize data prep and clustering
+python azureml_pipeline/pipeline_job.py --mode full \
+    --max_nodes 10 \
+    --parallelize_segment none \
+    --cluster_per_slide \
+    --segment_use_gpu \
+    --cluster_use_gpu
+```
+
+To use a separate cluster for clustering, set `AZURE_ML_CLUSTERING_CLUSTER` in your `.env` file:
+```bash
+AZURE_ML_CLUSTERING_CLUSTER=your-highmem-cpu-cluster
+```
+
 ---
 
 ## Performance Observations
@@ -331,10 +392,10 @@ To use this pipeline:
 - **Not for clinical use**: This software is for research and educational purposes only and has not been validated for clinical diagnosis
 - **Human review required**: Model outputs should always be reviewed by qualified professionals
 - **Variable performance**: Segmentation accuracy varies by tissue type and morphology
-- **Cost awareness**: GPT-4o API calls incur costs; monitor usage with large datasets
+- **Cost awareness**: Multimodal-LLM API calls incur costs; monitor usage with large datasets
 
 ### Current Limitations
-- Classification (GPT-4o) performance is experimental and secondary to segmentation/clustering
+- Classification (multimodal-LLM) performance is experimental and secondary to segmentation/clustering
 - Single model configuration may not work optimally for all tissue types
 - Lack of ground-truth polygon coordinates limits quantitative evaluation
 
@@ -369,7 +430,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Damion Young](https://www.medsci.ox.ac.uk/for-staff/staff/damion-young) and [Sharmila Rajendran](https://www.medsci.ox.ac.uk/for-staff/resources/educational-strategy-and-quality-assurance/teaching-excellence-awards/teaching-excellence-awards-2025) from [University of Oxford Medical Sciences Division](https://www.medsci.ox.ac.uk/) for ideating and formulating the research problem.
 - [University of Oxford AI Competency Center](https://oerc.ox.ac.uk/ai-centre) for supporting this research
 - [Cellpose](https://github.com/MouseLand/cellpose) for cell segmentation (including Cellpose-SAM)
-- [OpenAI](https://openai.com/) for GPT-4o vision capabilities
+- [OpenAI](https://openai.com/) for multimodal-LLM vision capabilities
 - [RAPIDS](https://rapids.ai/) for GPU-accelerated clustering (cuML DBSCAN)
 - [UMAP](https://umap-learn.readthedocs.io/) for dimensionality reduction
 - [PyTorch/torchvision](https://pytorch.org/) for ResNet-50 feature extraction

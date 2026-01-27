@@ -27,6 +27,7 @@ dependencies:
     - azure-ai-ml
     - azure-identity
     - azure-keyvault-secrets
+    - azureml-core
     - python-dotenv
     - cellpose==4.0.8
     - openai
