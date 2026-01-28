@@ -132,84 +132,6 @@ def build_param_string(args):
             parts.append("filteredAnnotated")
         return "_".join(parts)
 
-def build_cluster_command(**kwargs) -> str:
-    """Return the shell command for cluster.py with only the flags we need."""
-    cmd  = (
-        "python cluster.py "
-        "--segmentation_path ${{inputs.segmentation_path}} "
-        "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-        "--output_path ${{outputs.cluster_output}} "    )
-    if kwargs["cluster_eps"] is not None:
-        cmd += f"--eps {kwargs['cluster_eps']} "
-    cmd += f"--min_samples {kwargs['cluster_min_samples']} "
-    if kwargs["cluster_use_gpu"]:
-        cmd += "--gpu "
-    if kwargs["cluster_normalize"]:
-        cmd += "--normalize_embeddings "
-    if kwargs.get("cluster_per_slide", False):
-        cmd += "--per_slide "
-    if kwargs["cluster_use_umap"]:
-        cmd += (
-            "--use_umap "
-            f"--umap_n_components {kwargs['cluster_umap_components']} "
-            f"--umap_n_neighbors {kwargs['cluster_umap_neighbors']} "
-            f"--umap_min_dist {kwargs['cluster_umap_min_dist']} "
-            f"--umap_metric {kwargs['cluster_umap_metric']} "
-        )
-    # Add slide_folders support
-    if kwargs.get("cluster_slide_folders"):
-        slide_folders_str = " ".join(f'"{folder}"' for folder in kwargs["cluster_slide_folders"])
-        cmd += f"--slide_folders {slide_folders_str} "
-    logging.info("Cluster cmd: %s", cmd)
-    return cmd.strip()
-
-# --------------------------------------------------------------------------- #
-# Parallelization helpers
-# --------------------------------------------------------------------------- #
-# All stages use SLIDE-LEVEL parallelism for simplicity and reliability.
-# Data is organized in per-slide subfolders throughout the pipeline.
-# Each parallel stage uses trigger files (manifest) + side input pattern.
-#
-# NOTE: All stages use SLIDE-LEVEL parallelism for simplicity and reliability.
-# Data is organized in per-slide subfolders throughout the pipeline.
-DEFAULT_STAGE_PARALLELISM = {
-    "data_prep": "slide",      # Parallelize by WSI files, outputs per-slide subfolders
-    "tile_filter": "slide",    # Slide-level parallelism (trigger + side input)
-    "segment": "slide",        # Slide-level parallelism (trigger + side input)
-    "cluster": "slide",        # Parallelize by slide folders (per_slide mode)
-    "classify": "slide",       # Parallelize by slide folders
-    "post_process": "none",    # Must aggregate all results
-    "annotation": "none",      # Single-node
-    "cluster_tiles": "none",   # Single-node
-    "filtered_annotation": "none",  # Single-node
-}
-
-def get_stage_parallelism(stage: str, override: dict | None = None) -> str:
-    """Get the parallelism strategy for a specific stage.
-    
-    Args:
-        stage: Pipeline stage name
-        override: Optional dict of stage -> parallelism overrides
-    
-    Returns:
-        'tile', 'slide', or 'none'
-    """
-    if override and stage in override:
-        return override[stage]
-    return DEFAULT_STAGE_PARALLELISM.get(stage, "slide")
-
-def can_parallelize_stage(stage: str, max_nodes: int, override: dict | None = None) -> bool:
-    """Determine if a stage should use parallel execution.
-    
-    Returns True if:
-    - max_nodes > 1
-    - stage parallelism is not 'none'
-    """
-    if max_nodes <= 1:
-        return False
-    parallelism = get_stage_parallelism(stage, override)
-    return parallelism != "none"
-
 # --------------------------------------------------------------------------- #
 # Component factory
 # --------------------------------------------------------------------------- #
@@ -296,110 +218,60 @@ def build_components(
     mini_batch_size: str = "10",
     max_retries: int = 3,
     retry_timeout: int = 300,
-    stage_parallelism_overrides: dict | None = None,
     use_separate_clustering_cluster: bool = False,
     clustering_use_gpu: bool = True,
 ):
-    """Create the Azure ML command/parallel components used in the pipeline.
+    """Create the Azure ML parallel/command components used in the pipeline.
     
-    Uses slide-level parallelism throughout the pipeline:
-    - All parallel stages (data_prep, tile_filter, segment, cluster, classify) use trigger files + side input
-    - Data is organized in per-slide subfolders
-    - Single-node stages (post_process, annotation): standard command() jobs
-    
-    When max_nodes > 1 AND a stage supports parallelization:
-    - Uses parallel_run_function with entry scripts (parallel_*.py)
-    - Distributes mini-batches of trigger files (1 slide per batch) across nodes
-    
-    When max_nodes == 1 OR stage has no parallelization:
-    - Uses standard command() components
+    All stages use slide-level parallelism with parallel_run_function.
+    Single-node stages (post_process, annotation, cluster_tiles) use standard command() jobs.
     """
     logging.info("Building component objects …")
-    
-    # Determine if we should use parallel components
-    use_parallel = max_nodes > 1
-    
-    # Build per-stage parallelism info
-    stages = ["tile_filter", "segment", "classify", "cluster", "post_process", "annotation"]
-    logging.info(f"Parallelization settings (max_nodes={max_nodes}, processes_per_node={processes_per_node}):")
-    logging.info(f"  Using parallel_run_function: {use_parallel}")
-    for stage in stages:
-        parallelism = get_stage_parallelism(stage, stage_parallelism_overrides)
-        can_parallel = can_parallelize_stage(stage, max_nodes, stage_parallelism_overrides)
-        logging.info(f"  {stage}: {parallelism} (will_parallelize={can_parallel})")
+    logging.info(f"Parallelization settings: max_nodes={max_nodes}, processes_per_node={processes_per_node}")
     
     if use_separate_clustering_cluster:
         logging.info(f"  Clustering cluster: {COMPUTE_CLUSTER_CLUSTERING}")
         logging.info(f"  Clustering GPU: {clustering_use_gpu}")
 
     # ==================== DATA PREP ====================
-    should_parallelize_data_prep = use_parallel and can_parallelize_stage("data_prep", max_nodes, stage_parallelism_overrides)
-    
-    if should_parallelize_data_prep:
-        # Use parallel_run_function with entry script for slide-level parallelization
-        logging.info("Building PARALLEL data_prep component (slide-level)")
-        data_prep_component = parallel_run_function(
-            name="DataPrep",
-            display_name="Data Preparation - Tiling (Parallel)",
-            inputs=dict(
-                input_data=Input(type=AssetTypes.URI_FOLDER, description="Input folder with WSI files"),
-            ),
-            outputs=dict(
-                output_path=Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri),
-                manifest_path=Output(type=AssetTypes.URI_FOLDER, path=data_prep_manifest_uri),
-            ),
-            input_data="${{inputs.input_data}}",
-            instance_count=max_nodes,
-            max_concurrency_per_instance=processes_per_node,
-            mini_batch_size="1",  # 1 WSI file per mini-batch (they're large)
-            mini_batch_error_threshold=mini_batch_error_threshold,
-            retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
-            logging_level="INFO",
-            task=RunFunction(
-                code="./",
-                entry_script="parallel_data_prep.py",
-                environment=env,
-                program_arguments=(
-                    f"--output_path ${{{{outputs.output_path}}}} "
-                    f"--manifest_path ${{{{outputs.manifest_path}}}} "
-                    f"--tile_size 512 "
-                    f"--magnifications \"{magnifications}\" "
-                    f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
-                    "--replace_percent_in_names"
-                ),
-            ),
-        )
-    else:
-        # Use standard command component
-        logging.info("Building single-node data_prep component")
-        dp_cmd = (
-            "python data_prep.py "
-            "--input_data ${{inputs.input_data}} "
-            "--output_path ${{outputs.output_path}} "
-            f"--tile_size 512 "
-            f"--magnifications \"{magnifications}\" "
-            f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
-            "--replace_percent_in_names"
-        )
-        data_prep_component = command(
-            name="DataPrep",
-            display_name="Data Preparation (tiling)",
-            inputs={"input_data": Input(type=AssetTypes.URI_FOLDER)},
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri)},
+    logging.info("Building data_prep component")
+    data_prep_component = parallel_run_function(
+        name="DataPrep",
+        display_name="Data Preparation - Tiling",
+        inputs=dict(
+            input_data=Input(type=AssetTypes.URI_FOLDER, description="Input folder with WSI files"),
+        ),
+        outputs=dict(
+            output_path=Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri),
+            manifest_path=Output(type=AssetTypes.URI_FOLDER, path=data_prep_manifest_uri),
+        ),
+        input_data="${{inputs.input_data}}",
+        instance_count=max_nodes,
+        max_concurrency_per_instance=processes_per_node,
+        mini_batch_size="1",  # 1 WSI file per mini-batch (they're large)
+        mini_batch_error_threshold=mini_batch_error_threshold,
+        retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
+        logging_level="INFO",
+        task=RunFunction(
             code="./",
-            command=dp_cmd,
+            entry_script="parallel_data_prep.py",
             environment=env,
-        )
+            program_arguments=(
+                f"--output_path ${{{{outputs.output_path}}}} "
+                f"--manifest_path ${{{{outputs.manifest_path}}}} "
+                f"--tile_size 512 "
+                f"--magnifications \"{magnifications}\" "
+                f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
+                "--replace_percent_in_names"
+            ),
+        ),
+    )
 
     # ==================== TILE FILTER ====================
     tile_filter_component = None
     if filter_tiles:
-        should_parallelize_filter = can_parallelize_stage("tile_filter", max_nodes, stage_parallelism_overrides)
-        
-        if should_parallelize_filter:
-            # Use parallel_run_function with SLIDE-LEVEL parallelism
-            logging.info("Building PARALLEL tile_filter component (slide-level)")
-            tile_filter_component = parallel_run_function(
+        logging.info("Building tile_filter component")
+        tile_filter_component = parallel_run_function(
                 name="TileFilter",
                 display_name="Tile Quality Filtering (Parallel)",
                 inputs=dict(
@@ -435,38 +307,10 @@ def build_components(
                     ),
                 ),
             )
-        else:
-            # Use standard command component
-            logging.info("Building single-node tile_filter component")
-            filter_cmd = (
-                "python tile_filter.py "
-                "--input_path ${{inputs.input_path}} "
-                "--output_path ${{outputs.output_path}} "
-                f"--min_edge_density {filter_min_edge_density} "
-                f"--max_bright_ratio {filter_max_bright_ratio} "
-                f"--max_dark_ratio {filter_max_dark_ratio} "
-                f"--min_std_intensity {filter_min_std_intensity} "
-                f"--min_laplacian_var {filter_min_laplacian_var} "
-                f"--min_color_variance {filter_min_color_variance} "
-                "--save_stats"
-            )
-            tile_filter_component = command(
-                name="TileFilter",
-                display_name="Tile Quality Filtering",
-                inputs={"input_path": Input(type=AssetTypes.URI_FOLDER)},
-                outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_output_uri)},
-                code="./",
-                command=filter_cmd,
-                environment=env,
-            )
 
     # ==================== SEGMENTATION ====================
-    should_parallelize_segment = use_parallel
-    
-    if should_parallelize_segment:
-        # Use parallel_run_function with SLIDE-LEVEL parallelism
-        logging.info("Building PARALLEL segment component (slide-level)")
-        segment_component = parallel_run_function(
+    logging.info("Building segment component")
+    segment_component = parallel_run_function(
             name="Segmentation",
             display_name="Cell Segmentation (Parallel)",
             inputs=dict(
@@ -475,7 +319,7 @@ def build_components(
             ),
             outputs=dict(
                 output_path=Output(type=AssetTypes.URI_FOLDER, path=segment_output_uri),
-                output_manifest=Output(type=AssetTypes.URI_FOLDER, description="Trigger files for downstream steps"),
+                output_manifest=Output(type=AssetTypes.URI_FOLDER, description="Manifest for downstream steps"),
             ),
             input_data="${{inputs.trigger_path}}",
             instance_count=max_nodes,
@@ -504,53 +348,21 @@ def build_components(
                 ),
             ),
         )
-    else:
-        # Use standard command component
-        logging.info("Building single-node segment component")
-        seg_cmd = (
-            "python segment.py "
-            "--input_path ${{inputs.prepped_tiles_path}} "
-            "--output_path ${{outputs.output_path}} "
-            f"--pretrained_model {segment_pretrained_model} "
-            f"--flow_threshold {segment_flow_threshold} "
-            f"--cellprob_threshold {segment_cellprob_threshold} "
-            f"{'--segment_use_gpu ' if segment_use_gpu else ''}"
-            f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
-            f"{'--resample ' if segment_resample else ''}"
-            f"{'--normalize ' if segment_normalize else '--no_normalize '}"
-            f"{'--do_3D ' if segment_do_3D else ''}"
-            f"--stitch_threshold {segment_stitch_threshold} "
-        )
-        segment_component = command(
-            name="Segmentation",
-            display_name="Cell segmentation",
-            inputs={"prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER)},
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=segment_output_uri)},
-            code="./",
-            command=seg_cmd,
-            environment=env,
-        )
 
     # ==================== CLUSTERING ====================
-    # Clustering can be parallelized at slide-level when using --cluster_per_slide mode
-    should_parallelize_cluster = use_parallel and can_parallelize_stage("cluster", max_nodes, stage_parallelism_overrides) and cluster_per_slide
-    
-    if should_parallelize_cluster:
-        # Use parallel_run_function with trigger files for slide-level parallelization
-        logging.info("Building PARALLEL cluster component (slide-level, per_slide mode)")
-        cluster_component = parallel_run_function(
+    logging.info("Building cluster component")
+    cluster_component = parallel_run_function(
             name="Clustering",
-            display_name="DBSCAN Clustering (Parallel Per-Slide)",
+            display_name="DBSCAN Clustering (Per-Slide)",
             inputs=dict(
-                trigger_path=Input(type=AssetTypes.URI_FOLDER, description="Trigger files from segmentation", mode="ro_mount"),
+                trigger_path=Input(type=AssetTypes.URI_FOLDER, description="Manifest triggers", mode="ro_mount"),
                 segmentation_path=Input(type=AssetTypes.URI_FOLDER, description="Segmentation results folder", mode="ro_mount"),
                 prepped_tiles_path=Input(type=AssetTypes.URI_FOLDER, description="Prepped tiles folder", mode="ro_mount"),
             ),
             outputs=dict(
                 cluster_output=Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri),
-                output_manifest=Output(type=AssetTypes.URI_FOLDER, description="Trigger files for downstream steps"),
+                output_manifest=Output(type=AssetTypes.URI_FOLDER, description="Manifest for downstream steps"),
             ),
-            # Enumerate trigger files from segmentation step
             input_data="${{inputs.trigger_path}}",
             instance_count=max_nodes,
             max_concurrency_per_instance=processes_per_node,
@@ -579,108 +391,48 @@ def build_components(
                 ),
             ),
         )
-    else:
-        # Use standard command component (either single-node or global clustering)
-        logging.info("Building single-node cluster component")
-        cluster_component = command(
-            name="Clustering",
-            display_name="DBSCAN clustering of cells",
-            inputs={
-                "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
-                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
-            },
-            outputs={"cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri)},
-            code="./",
-            command=build_cluster_command(
-                cluster_eps=cluster_eps,
-                cluster_min_samples=cluster_min_samples,
-                cluster_use_gpu=cluster_use_gpu,
-                cluster_normalize=cluster_normalize,
-                cluster_use_umap=cluster_use_umap,
-                cluster_umap_components=cluster_umap_components,
-                cluster_umap_neighbors=cluster_umap_neighbors,
-                cluster_umap_min_dist=cluster_umap_min_dist,
-                cluster_umap_metric=cluster_umap_metric,
-                cluster_per_slide=cluster_per_slide,
-                cluster_slide_folders=cluster_slide_folders,
-            ),
-            environment=env,
-        )
 
     # ==================== CLASSIFICATION ====================
-    # Classification can be parallelized at slide-level
-    # Each slide is processed independently (reads its own cluster_assignments.json)
     openai_api_key = os.getenv("OPENAI_API_KEY")
     classify_env = {"OPENAI_API_KEY": openai_api_key} if openai_api_key else {}
     
-    should_parallelize_classify = use_parallel and can_parallelize_stage("classify", max_nodes, stage_parallelism_overrides)
-    
-    if should_parallelize_classify:
-        # Use parallel_run_function with trigger files for slide-level parallelization
-        logging.info("Building PARALLEL classify component (slide-level)")
-        classify_component = parallel_run_function(
-            name="Classification",
-            display_name="multimodal-LLM Classification (Parallel Per-Slide)",
-            inputs=dict(
-                trigger_path=Input(type=AssetTypes.URI_FOLDER, description="Trigger files from clustering", mode="ro_mount"),
-                segmented_path=Input(type=AssetTypes.URI_FOLDER, description="Segmentation results folder", mode="ro_mount"),
-                prepped_tiles_path=Input(type=AssetTypes.URI_FOLDER, description="Prepped tiles folder", mode="ro_mount"),
-                cluster_path=Input(type=AssetTypes.URI_FOLDER, description="Clustering results folder", mode="ro_mount"),
-            ),
-            outputs=dict(
-                output_path=Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri),
-                job_output_file=Output(type=AssetTypes.URI_FILE),
-            ),
-            # Enumerate trigger files from clustering step
-            input_data="${{inputs.trigger_path}}",
-            instance_count=max_nodes,
-            max_concurrency_per_instance=processes_per_node,
-            mini_batch_size="1",  # 1 slide per mini-batch (API rate limits)
-            mini_batch_error_threshold=mini_batch_error_threshold,
-            retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
-            logging_level="INFO",
-            task=RunFunction(
-                code="./",
-                entry_script="parallel_classify.py",
-                environment=env,
-                append_row_to="${{outputs.job_output_file}}",
-                program_arguments=(
-                    f"--segmented_path ${{{{inputs.segmented_path}}}} "
-                    f"--prepped_tiles_path ${{{{inputs.prepped_tiles_path}}}} "
-                    f"--clustered_cells_path ${{{{inputs.cluster_path}}}} "
-                    f"--output_path ${{{{outputs.output_path}}}} "
-                    f"--num_classes 4 "
-                    f"--classify_per_cluster {classify_per_cluster}"
-                ),
-            ),
-            environment_variables=classify_env,
-        )
-    else:
-        # Use standard command component
-        logging.info("Building single-node classify component")
-        cls_cmd = (
-            "python classify.py "
-            "--segmented_path ${{inputs.segmented_path}} "
-            "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
-            "--clustered_cells_path ${{inputs.cluster_path}} "
-            "--output_path ${{outputs.output_path}} "
-            "--num_classes 4 "
-            f"--classify_per_cluster {classify_per_cluster}"
-        )
-        classify_component = command(
-            name="Classification",
-            display_name="multimodal-LLM cell-type labelling",
-            inputs={
-                "segmented_path"   : Input(type=AssetTypes.URI_FOLDER),
-                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
-                "cluster_path"     : Input(type=AssetTypes.URI_FOLDER),
-            },
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri)},
+    logging.info("Building classify component")
+    classify_component = parallel_run_function(
+        name="Classification",
+        display_name="LLM Classification (Per-Slide)",
+        inputs=dict(
+            trigger_path=Input(type=AssetTypes.URI_FOLDER, description="Manifest triggers", mode="ro_mount"),
+            segmented_path=Input(type=AssetTypes.URI_FOLDER, description="Segmentation results folder", mode="ro_mount"),
+            prepped_tiles_path=Input(type=AssetTypes.URI_FOLDER, description="Prepped tiles folder", mode="ro_mount"),
+            cluster_path=Input(type=AssetTypes.URI_FOLDER, description="Clustering results folder", mode="ro_mount"),
+        ),
+        outputs=dict(
+            output_path=Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri),
+            job_output_file=Output(type=AssetTypes.URI_FILE),
+        ),
+        input_data="${{inputs.trigger_path}}",
+        instance_count=max_nodes,
+        max_concurrency_per_instance=processes_per_node,
+        mini_batch_size="1",  # 1 slide per mini-batch (API rate limits)
+        mini_batch_error_threshold=mini_batch_error_threshold,
+        retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
+        logging_level="INFO",
+        task=RunFunction(
             code="./",
-            command=cls_cmd,
+            entry_script="parallel_classify.py",
             environment=env,
-            environment_variables=classify_env,
-        )
+            append_row_to="${{outputs.job_output_file}}",
+            program_arguments=(
+                f"--segmented_path ${{{{inputs.segmented_path}}}} "
+                f"--prepped_tiles_path ${{{{inputs.prepped_tiles_path}}}} "
+                f"--clustered_cells_path ${{{{inputs.cluster_path}}}} "
+                f"--output_path ${{{{outputs.output_path}}}} "
+                f"--num_classes 4 "
+                f"--classify_per_cluster {classify_per_cluster}"
+            ),
+        ),
+        environment_variables=classify_env,
+    )
 
     post_cmd = (
         "python post_process.py "
@@ -966,23 +718,6 @@ def run_pipeline():
     p.add_argument("--retry_timeout", type=int, default=300,
                    help="Timeout in seconds for each mini-batch retry (default: 300)")
     
-    # Per-stage parallelism overrides (all stages use slide-level by default)
-    p.add_argument("--parallelize_data_prep", type=str, default=None,
-                   choices=["slide", "none"],
-                   help="Override parallelism for data preparation (default: slide)")
-    p.add_argument("--parallelize_tile_filter", type=str, default=None,
-                   choices=["slide", "none"],
-                   help="Override parallelism for tile filtering (default: slide)")
-    p.add_argument("--parallelize_segment", type=str, default=None,
-                   choices=["slide", "none"],
-                   help="Override parallelism for segmentation (default: slide)")
-    p.add_argument("--parallelize_cluster", type=str, default=None,
-                   choices=["slide", "none"],
-                   help="Override parallelism for clustering - requires --cluster_per_slide (default: slide)")
-    p.add_argument("--parallelize_classify", type=str, default=None,
-                   choices=["slide", "none"],
-                   help="Override parallelism for classification (default: slide)")
-    
     # Clustering-specific settings
     p.add_argument("--use_separate_clustering_cluster", action="store_true",
                    help="Use a separate compute cluster for clustering (set AZURE_ML_CLUSTERING_CLUSTER in .env)")
@@ -1028,16 +763,6 @@ def run_pipeline():
     )
     ml_client.environments.create_or_update(env)
     # ------------- Build components ------------- #
-    args.stage_parallelism_overrides = {
-        k: v for k, v in {
-            "data_prep": args.parallelize_data_prep,
-            "tile_filter": args.parallelize_tile_filter,
-            "segment": args.parallelize_segment,
-            "cluster": args.parallelize_cluster,
-            "classify": args.parallelize_classify,
-        }.items() if v is not None
-    }
-
     components = build_components(
         env=env,
         data_prep_output_uri=dp_uri,
@@ -1124,7 +849,6 @@ def run_pipeline():
         mini_batch_error_threshold=args.mini_batch_error_threshold,
         max_retries=args.max_retries,
         retry_timeout=args.retry_timeout,
-        stage_parallelism_overrides=args.stage_parallelism_overrides,
         use_separate_clustering_cluster=args.use_separate_clustering_cluster,
         clustering_use_gpu=args.clustering_use_gpu if args.clustering_use_gpu else args.cluster_use_gpu,
     )
@@ -1149,12 +873,7 @@ def run_pipeline():
     def full_pipeline(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
         
-        # Determine if we're using parallel mode (with trigger files)
-        is_parallel = args.max_nodes > 1
-        
-        # All stages use slide-level parallelism with trigger files + side input pattern
         if args.filter_tiles and "tile_filter" in components:
-            # Slide-level: trigger manifest + mounted tiles
             tile_filter = components["tile_filter"](
                 trigger_path=prep.outputs.manifest_path,
                 input_path=prep.outputs.output_path
@@ -1167,48 +886,26 @@ def run_pipeline():
             trigger_for_segment = prep.outputs.manifest_path
             tiles_for_clustering = prep.outputs.output_path
 
-        # Segmentation with trigger files (parallel) or just input (single-node)
-        if is_parallel:
-            seg = components["segment"](
-                trigger_path=trigger_for_segment,
-                prepped_tiles_path=tiles_for_segmentation
-            )
-            
-            # Cluster uses segment's manifest as triggers
-            clu = components["cluster"](
-                trigger_path=seg.outputs.output_manifest,
-                segmentation_path=seg.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering
-            )
-            
-            # Override compute target for clustering if using separate cluster
-            if args.use_separate_clustering_cluster:
-                clu.compute = clustering_cluster_target
-            
-            # Classify uses cluster's manifest as triggers
-            cls = components["classify"](
-                trigger_path=clu.outputs.output_manifest,
-                segmented_path=seg.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering,
-                cluster_path=clu.outputs.cluster_output
-            )
-        else:
-            # Single-node: no trigger files
-            seg = components["segment"](prepped_tiles_path=tiles_for_segmentation)
-            
-            clu = components["cluster"](
-                segmentation_path=seg.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering
-            )
-            
-            if args.use_separate_clustering_cluster:
-                clu.compute = clustering_cluster_target
-            
-            cls = components["classify"](
-                segmented_path=seg.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering,
-                cluster_path=clu.outputs.cluster_output
-            )
+        seg = components["segment"](
+            trigger_path=trigger_for_segment,
+            prepped_tiles_path=tiles_for_segmentation
+        )
+        
+        clu = components["cluster"](
+            trigger_path=seg.outputs.output_manifest,
+            segmentation_path=seg.outputs.output_path,
+            prepped_tiles_path=tiles_for_clustering
+        )
+        
+        if args.use_separate_clustering_cluster:
+            clu.compute = clustering_cluster_target
+        
+        cls = components["classify"](
+            trigger_path=clu.outputs.output_manifest,
+            segmented_path=seg.outputs.output_path,
+            prepped_tiles_path=tiles_for_clustering,
+            cluster_path=clu.outputs.cluster_output
+        )
         
         post = components["post_process"](segmentation_path=seg.outputs.output_path,
                                          classification_path=cls.outputs.output_path)
@@ -1236,102 +933,13 @@ def run_pipeline():
     def data_prep_pipeline(slides_in):
         prep = components["data_prep"](input_data=slides_in)
         if args.filter_tiles and "tile_filter" in components:
-            filtered = components["tile_filter"](input_path=prep.outputs.output_path)
+            filtered = components["tile_filter"](
+                trigger_path=prep.outputs.manifest_path,
+                input_path=prep.outputs.output_path
+            )
             return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
-        return {"prepped": prep.outputs.output_path}
-    @pipeline(compute=COMPUTE_CLUSTER, description="Seg→Clu→Cls→Post")
-    def seg_cluster_cls_pipeline(prepped_in):
-        seg = components["segment"](prepped_tiles_path=prepped_in)
-        clu = components["cluster"](segmentation_path=seg.outputs.output_path,
-                                   prepped_tiles_path=prepped_in)
-        
-        # Override compute target for clustering if using separate cluster
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-        
-        cls = components["classify"](segmented_path=seg.outputs.output_path,
-                                    prepped_tiles_path=prepped_in,
-                                    cluster_path=clu.outputs.cluster_output)
-        post = components["post_process"](segmentation_path=seg.outputs.output_path,
-                                         classification_path=cls.outputs.output_path)
-        
-        outputs = {"final_output": post.outputs.output_path}
-        
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](annotations_json=post.outputs.output_path,
-                                              prepped_tiles_path=prepped_in)
-            outputs["annotations"] = annotate.outputs.output_path
-        
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
-                                                       prepped_tiles_path=prepped_in)
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
-                                                                     prepped_tiles_path=prepped_in)
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-        
-        return outputs
-    @pipeline(compute=COMPUTE_CLUSTER, description="Clu→Cls→Post")
-    def cluster_cls_pipeline(prepped_in, segmented_in):
-        clu = components["cluster"](segmentation_path=segmented_in,
-                                   prepped_tiles_path=prepped_in)
-        
-        # Override compute target for clustering if using separate cluster
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-        
-        cls = components["classify"](segmented_path=segmented_in,
-                                    prepped_tiles_path=prepped_in,
-                                    cluster_path=clu.outputs.cluster_output)
-        post = components["post_process"](segmentation_path=segmented_in,
-                                         classification_path=cls.outputs.output_path)
-        
-        outputs = {"final_output": post.outputs.output_path}
-        
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](annotations_json=post.outputs.output_path,
-                                              prepped_tiles_path=prepped_in)
-            outputs["annotations"] = annotate.outputs.output_path
-        
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
-                                                       prepped_tiles_path=prepped_in)
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
-                                                                     prepped_tiles_path=prepped_in)
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-        
-        return outputs
-    @pipeline(compute=COMPUTE_CLUSTER, description="Cls→Post")
-    def classify_only_pipeline(prepped_in, segmented_in, cluster_in):
-        cls = components["classify"](segmented_path=segmented_in,
-                                    prepped_tiles_path=prepped_in,
-                                    cluster_path=cluster_in)
-        post = components["post_process"](segmentation_path=segmented_in,
-                                         classification_path=cls.outputs.output_path)
-        
-        outputs = {"final_output": post.outputs.output_path}
-        
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](annotations_json=post.outputs.output_path,
-                                              prepped_tiles_path=prepped_in)
-            outputs["annotations"] = annotate.outputs.output_path
-        
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
-                                                       prepped_tiles_path=prepped_in)
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
-                                                                     prepped_tiles_path=prepped_in)
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-        
-        return outputs
+        return {"prepped": prep.outputs.output_path, "manifest": prep.outputs.manifest_path}
+    
     @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing results")
     def annotate_only_pipeline(postprocess_in, prepped_in):
         if "annotation" in components:
@@ -1377,19 +985,11 @@ def run_pipeline():
     job = None
     if mode == "prep_only":
         job = data_prep_pipeline(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
-    elif mode == "seg_cluster_cls":
-        job = seg_cluster_cls_pipeline(prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri))
-    elif mode == "cluster_cls":
-        job = cluster_cls_pipeline(
-            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-            segmented_in=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri),
-        )
-    elif mode == "classify_only":
-        job = classify_only_pipeline(
-            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-            segmented_in=Input(type=AssetTypes.URI_FOLDER, path=args.segmented_data_uri),
-            cluster_in=Input(type=AssetTypes.URI_FOLDER, path=args.clustered_data_uri),
-        )
+    elif mode in ("seg_cluster_cls", "cluster_cls", "classify_only"):
+        logging.error(f"Mode '{mode}' has been removed. These resume modes required trigger/manifest files ")
+        logging.error("that were only generated by the old non-parallel scripts.")
+        logging.error("Please use --mode full instead, or re-run the full pipeline from the beginning.")
+        return
     elif mode == "annotate_only":
         if not args.enable_annotations:
             logging.error("annotate_only mode requires --enable_annotations flag")

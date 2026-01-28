@@ -66,12 +66,11 @@ When exploring a clustered slide, **every cell is color-coded by its cluster**. 
 |------|-------------|
 | `full` | Complete pipeline: prep → filter → segment → cluster → classify → post-process |
 | `prep_only` | Data preparation and optional tile filtering only |
-| `seg_cluster_cls` | Segmentation → Clustering → Classification (from prepped data) |
-| `cluster_cls` | Clustering → Classification (from segmented data) |
-| `classify_only` | Classification only (from clustered data) |
 | `annotate_only` | Generate image annotations from existing results |
 | `extract_cluster_tiles_only` | Extract representative tiles from existing results |
 | `cluster_tiles_and_filtered_annotations` | Extract tiles and create filtered annotations |
+
+> **Note**: Previous resume modes (`seg_cluster_cls`, `cluster_cls`, `classify_only`) have been removed as they required trigger/manifest files from older non-parallel scripts. Use `--mode full` for new runs.
 
 ---
 
@@ -166,14 +165,6 @@ python azureml_pipeline/pipeline_job.py --mode full \
     --cluster_analyzer_max_items 20
 ```
 
-### From Existing Prepped Data (skip tiling)
-```bash
-python azureml_pipeline/pipeline_job.py --mode seg_cluster_cls \
-    --segment_use_gpu \
-    --cluster_use_gpu \
-    --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_tiles/"
-```
-
 ### Generate Annotations from Existing Results
 ```bash
 python azureml_pipeline/pipeline_job.py --mode annotate_only \
@@ -224,7 +215,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 ### Segmentation (Cellpose)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--segment_pretrained_model` | `"cpsam"` | Cellpose pretrained model name: `cpsam` (Cellpose-SAM), `cyto`, `cyto2`, `cyto3`, `nuclei`, etc. |
+| `--segment_pretrained_model` | `"cpsam"` | Cellpose pretrained model: `cpsam` (Cellpose-SAM), `cyto`, `cyto2`, `cyto3`, `nuclei`, `tissuenet`, `livecell`, `yeast_PhC`, `yeast_BF`, `bact_phase`, `bact_fluor`, `deepbact`, `cyto2_cp3`, `cyto2_omni` |
 | `--segment_flow_threshold` | `0.4` | Flow threshold (lower = stricter shape filtering) |
 | `--segment_cellprob_threshold` | `0.0` | Cell probability threshold (higher = stricter cell detection) |
 | `--segment_use_gpu` | `True` | Enable GPU acceleration |
@@ -246,8 +237,8 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--cluster_umap_neighbors` | `15` | UMAP n_neighbors parameter |
 | `--cluster_umap_min_dist` | `0.1` | UMAP min_dist parameter |
 | `--cluster_umap_metric` | `"euclidean"` | Distance metric for UMAP |
-| `--cluster_per_slide` | `False` | Cluster each slide separately vs. globally |
-| `--cluster_slide_folders` | `None` | Specific slide folder names to process (when using `--cluster_per_slide`) |
+| `--cluster_per_slide` | `False` | Cluster each slide separately (always per-slide in parallel mode) |
+| `--cluster_slide_folders` | `None` | Specific slide folder names to process |
 
 ### Classification (multimodal-LLM)
 | Parameter | Default | Description |
@@ -262,13 +253,13 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--annotation_random_labels` | `False` | Pick labels randomly up to max_labels |
 | `--annotation_draw_polygon` | `True` | Draw cell boundary polygons |
 | `--annotation_draw_bbox` | `False` | Draw bounding boxes |
-| `--annotation_no_text` | `True` | Do not draw text labels |
+| `--annotation_no_text` | `True` | Do not draw text labels (default: no text) |
 | `--annotation_text_use_pred_class` | `False` | Include predicted class in text labels |
 | `--annotation_text_use_cluster_id` | `False` | Include cluster ID in text labels |
 | `--annotation_text_use_cluster_confidence` | `False` | Include cluster confidence in text labels |
 | `--annotation_text_scale` | `0.5` | Scale factor for text size |
 | `--annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
-| `--annotation_filter_unclassified` | `True` | Filter out unclassified cells |
+| `--annotation_filter_unclassified` | `True` | Filter out unclassified cells (default: filtered) |
 
 ### Representative Tile Extraction
 | Parameter | Default | Description |
@@ -293,40 +284,33 @@ Parameters for annotating the representative tiles extracted by the cluster anal
 | `--filtered_annotation_text_use_cluster_confidence` | `False` | Include cluster confidence in text labels |
 | `--filtered_annotation_text_scale` | `0.5` | Scale factor for text size |
 | `--filtered_annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
-| `--filtered_annotation_filter_unclassified` | `True` | Filter out unclassified cells |
+| `--filtered_annotation_filter_unclassified` | `True` | Filter out unclassified cells (default: filtered) |
 
 ### Multi-Node Parallelization
-Control how the pipeline distributes work across compute nodes. The pipeline uses a **hybrid parallelization strategy** via Azure ML's `parallel_run_function` that respects the natural granularity of each stage:
+Control how the pipeline distributes work across compute nodes. The pipeline uses **slide-level parallelization** via Azure ML's `parallel_run_function` where each slide is processed independently:
 
-| Stage | Default Strategy | Parallel Entry Script | Reason |
-|-------|------------------|----------------------|--------|
-| Data prep | `slide` | `parallel_data_prep.py` | Each WSI file is tiled independently |
-| Tile filtering | `tile` | `parallel_tile_filter.py` | Each tile evaluated independently |
-| Segmentation | `tile` | `parallel_segment.py` | Cellpose processes each tile independently |
-| Clustering | `slide` | `parallel_cluster.py` | Per-slide UMAP + DBSCAN (requires `--cluster_per_slide`) |
-| Classification | `slide` | `parallel_classify.py` | Each slide classified independently |
-| Post-processing | `none` | - | Aggregates per-slide results (single node) |
-| Annotation | `none` | - | Per-slide output files (single node) |
+| Stage | Parallel Entry Script | Description |
+|-------|----------------------|-------------|
+| Data prep | `parallel_data_prep.py` | Each WSI file is tiled independently |
+| Tile filtering | `parallel_tile_filter.py` | Filters tiles per slide |
+| Segmentation | `parallel_segment.py` | Cellpose processes each slide's tiles |
+| Clustering | `parallel_cluster.py` | Per-slide UMAP + DBSCAN clustering |
+| Classification | `parallel_classify.py` | Each slide classified independently |
+| Post-processing | `post_process.py` | Aggregates per-slide results (single node) |
+| Annotation | `annotate_images.py` | Per-slide output files (single node) |
 
 When `--max_nodes > 1`:
-- **Tile-level stages** (filtering, segmentation): Distribute mini-batches of tile files across nodes
-- **Slide-level stages** (data_prep, clustering, classification): Distribute entire slides across nodes
-
-**Note**: Slide-level clustering parallelization requires `--cluster_per_slide` flag, as global clustering needs all embeddings at once.
+- Multiple slides are processed in parallel across compute nodes
+- Each node processes one slide at a time (mini-batch size = 1)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--max_nodes` | `1` | Maximum number of compute nodes (1 = single node, no parallelization) |
 | `--processes_per_node` | `1` | Number of processes per node (set >1 for multi-GPU nodes) |
-| `--mini_batch_size` | `10` | Number of files per mini-batch for tile-level parallel stages |
+| `--mini_batch_size` | `1` | Number of slides per mini-batch (default: 1 slide per batch) |
 | `--mini_batch_error_threshold` | `5` | Number of failed mini-batches allowed before failing the job |
 | `--max_retries` | `3` | Max retries per mini-batch on failure/timeout (useful for low-priority VMs) |
 | `--retry_timeout` | `300` | Timeout in seconds for each mini-batch retry |
-| `--parallelize_data_prep` | `slide` | Override: `slide` or `none` |
-| `--parallelize_tile_filter` | `tile` | Override: `tile`, `slide`, or `none` |
-| `--parallelize_segment` | `tile` | Override: `tile`, `slide`, or `none` |
-| `--parallelize_cluster` | `slide` | Override: `slide` or `none` (requires `--cluster_per_slide`) |
-| `--parallelize_classify` | `slide` | Override: `slide` or `none` |
 | `--use_separate_clustering_cluster` | `False` | Use a separate compute cluster for clustering (e.g., high-RAM CPU cluster) |
 | `--clustering_use_gpu` | `False` | Use GPU for clustering on the clustering cluster |
 
@@ -334,21 +318,9 @@ When `--max_nodes > 1`:
 ```bash
 python azureml_pipeline/pipeline_job.py --mode full \
     --max_nodes 10 \
-    --cluster_per_slide \
     --segment_use_gpu \
     --cluster_use_gpu \
     --raw_slides_uri "azureml://datastores/workspaceblobstore/paths/your_slides/"
-```
-
-#### Example: Disable parallelization for specific stages
-```bash
-# Run segmentation on single node (for debugging), but parallelize data prep and clustering
-python azureml_pipeline/pipeline_job.py --mode full \
-    --max_nodes 10 \
-    --parallelize_segment none \
-    --cluster_per_slide \
-    --segment_use_gpu \
-    --cluster_use_gpu
 ```
 
 To use a separate cluster for clustering, set `AZURE_ML_CLUSTERING_CLUSTER` in your `.env` file:

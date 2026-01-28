@@ -142,7 +142,7 @@ def annotate_images(json_file, images_dir, output_dir,
                     text_scale,
                     text_use_pred_class, text_use_cluster_id, text_use_cluster_confidence, no_text,
                     color_by,
-                    filter_unclassified): # Added filter_unclassified parameter
+                    filter_unclassified):
     """
     Reads the label JSON file, draws bounding boxes and/or polygons for each cell,
     then writes annotated images to the output directory.
