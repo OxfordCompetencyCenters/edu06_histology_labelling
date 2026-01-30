@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 
 # Suppress Azure ML SDK internal deprecation warning for pathOnCompute
-# This is a known SDK issue - path parameter still works correctly
 warnings.filterwarnings("ignore", message=".*pathOnCompute is not a known attribute.*")
 
 from dotenv import load_dotenv
@@ -106,8 +105,6 @@ def build_param_string(args):
             parts.append("resample")
         if not args.segment_normalize:
             parts.append("nonorm")
-        if args.segment_do_3D:
-            parts.append("3D")
         if args.cluster_normalize:
             parts.append("norm")
         if args.cluster_use_gpu:
@@ -168,8 +165,7 @@ def build_components(
     segment_diameter: float | None,
     segment_resample: bool,
     segment_normalize: bool,
-    segment_do_3D: bool,
-    segment_stitch_threshold: float,
+    segmentation_tile_batch_size: int,
     cluster_eps: float | None,
     cluster_min_samples: int,
     cluster_use_gpu: bool,
@@ -215,7 +211,7 @@ def build_components(
     max_nodes: int = 1,
     processes_per_node: int = 1,
     mini_batch_error_threshold: int = 5,
-    mini_batch_size: str = "10",
+    mini_batch_size: str = "1",
     max_retries: int = 3,
     retry_timeout: int = 300,
     use_separate_clustering_cluster: bool = False,
@@ -248,7 +244,7 @@ def build_components(
         input_data="${{inputs.input_data}}",
         instance_count=max_nodes,
         max_concurrency_per_instance=processes_per_node,
-        mini_batch_size="1",  # 1 WSI file per mini-batch (they're large)
+        mini_batch_size=mini_batch_size,
         mini_batch_error_threshold=mini_batch_error_threshold,
         retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
         logging_level="INFO",
@@ -285,7 +281,7 @@ def build_components(
                 input_data="${{inputs.trigger_path}}",
                 instance_count=max_nodes,
                 max_concurrency_per_instance=processes_per_node,
-                mini_batch_size="1",
+                mini_batch_size=mini_batch_size,
                 mini_batch_error_threshold=mini_batch_error_threshold,
                 retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
                 logging_level="INFO",
@@ -324,7 +320,7 @@ def build_components(
             input_data="${{inputs.trigger_path}}",
             instance_count=max_nodes,
             max_concurrency_per_instance=processes_per_node,
-            mini_batch_size="1",
+            mini_batch_size=mini_batch_size,
             mini_batch_error_threshold=mini_batch_error_threshold,
             retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
             logging_level="INFO",
@@ -343,8 +339,7 @@ def build_components(
                     f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
                     f"{'--resample ' if segment_resample else ''}"
                     f"{'--normalize ' if segment_normalize else '--no_normalize '}"
-                    f"{'--do_3D ' if segment_do_3D else ''}"
-                    f"--stitch_threshold {segment_stitch_threshold}"
+                    f"--tile_batch_size {segmentation_tile_batch_size}"
                 ),
             ),
         )
@@ -366,7 +361,7 @@ def build_components(
             input_data="${{inputs.trigger_path}}",
             instance_count=max_nodes,
             max_concurrency_per_instance=processes_per_node,
-            mini_batch_size="1",  # 1 slide per mini-batch
+            mini_batch_size=mini_batch_size,  # 1 slide per mini-batch
             mini_batch_error_threshold=mini_batch_error_threshold,
             retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
             logging_level="INFO",
@@ -413,7 +408,7 @@ def build_components(
         input_data="${{inputs.trigger_path}}",
         instance_count=max_nodes,
         max_concurrency_per_instance=processes_per_node,
-        mini_batch_size="1",  # 1 slide per mini-batch (API rate limits)
+        mini_batch_size=mini_batch_size,  # 1 slide per mini-batch (API rate limits)
         mini_batch_error_threshold=mini_batch_error_threshold,
         retry_settings=dict(max_retries=max_retries, timeout=retry_timeout),
         logging_level="INFO",
@@ -621,10 +616,8 @@ def run_pipeline():
                    help="Enable resampling for better segmentation of variable-sized objects")
     p.add_argument("--segment_normalize", action="store_true", default=True,
                    help="Normalize images before segmentation (recommended for most cases)")
-    p.add_argument("--segment_do_3D", action="store_true",
-                   help="Enable 3D segmentation (for Z-stacks)")
-    p.add_argument("--segment_stitch_threshold", type=float, default=0.0,
-                   help="Threshold for stitching masks across tiles (0.0 = no stitching)")
+    p.add_argument("--segmentation_tile_batch_size", type=int, default=1,
+                   help="Number of tiles to segment in a single batch (higher = faster on GPU, more VRAM)")
 
     # Clustering
     p.add_argument("--cluster_eps", type=float, default=None)
@@ -798,8 +791,7 @@ def run_pipeline():
         segment_diameter=args.segment_diameter,
         segment_resample=args.segment_resample,
         segment_normalize=args.segment_normalize,
-        segment_do_3D=args.segment_do_3D,
-        segment_stitch_threshold=args.segment_stitch_threshold,
+        segmentation_tile_batch_size=args.segmentation_tile_batch_size,
         # clustering
         cluster_eps=args.cluster_eps,
         cluster_min_samples=args.cluster_min_samples,

@@ -3,7 +3,7 @@ Azure ML Parallel Entry Script for Data Preparation (WSI Tiling).
 
 This script implements the init()/run(mini_batch) interface required by
 Azure ML parallel_run_function. Each mini-batch contains a list of WSI
-file paths (e.g., .ndpi, .svs) to tile.
+file paths (e.g., .ndpi) to tile.
 
 This enables SLIDE-LEVEL parallelization: different nodes process different
 whole slide images simultaneously.
@@ -33,7 +33,6 @@ from PIL import Image
 _args = None
 _output_base = None
 
-
 def init():
     """
     Initialize resources before processing mini-batches.
@@ -59,7 +58,7 @@ def init():
     parser.add_argument("--num_tiles", type=int, default=None,
                         help="Target number of tiles per magnification (grid is thinned)")
     parser.add_argument("--replace_percent_in_names", action="store_true",
-                        help="Replace '%' characters in slide names with '_percentage_'")
+                        help="Replace '%' characters in slide names with '_pct_'")
     parser.add_argument("--flat_output", action="store_true",
                         help="Output tiles to flat structure (all at root level)")
     
@@ -86,7 +85,7 @@ def parse_magnifications(mag_str: str) -> List[float]:
 def generate_slide_id(slide_name: str, replace_percent: bool = False) -> str:
     """Generate a short, filesystem-safe ID from slide name."""
     if replace_percent:
-        slide_name = slide_name.replace('%', '_percentage_')
+        slide_name = slide_name.replace('%', '_pct_')
     
     clean_name = "".join(c for c in slide_name if c.isalnum() or c in " -_")
     short_name = clean_name[:20].strip()
@@ -95,10 +94,10 @@ def generate_slide_id(slide_name: str, replace_percent: bool = False) -> str:
 
 
 def format_magnification_tag(mag: float) -> str:
-    """Convert magnification to readable format: 1.0 -> 1d000, 0.7 -> 0d700."""
+    """Convert magnification to readable format: 1.0 -> 1d00, 0.7 -> 0d70."""
     int_part = int(mag)
-    frac_part = int((mag - int_part) * 1000)
-    return f"{int_part}d{frac_part:03d}"
+    frac_part = int((mag - int_part) * 100)
+    return f"{int_part}d{frac_part:02d}"
 
 
 def create_tile_filename(slide_id: str, mag: float, x: int, y: int, idx: int) -> str:
@@ -193,8 +192,7 @@ def tile_slide(slide_path: Path) -> dict:
             else:
                 enlarged_size = int(tile_size * mag)
                 region = region.resize((enlarged_size, enlarged_size), Image.LANCZOS)
-                left = (enlarged_size - tile_size) // 2
-                top = (enlarged_size - tile_size) // 2
+                left = top = (enlarged_size - tile_size) // 2
                 region = region.crop((left, top, left + tile_size, top + tile_size))
             
             out_name = create_tile_filename(slide_id, mag, x, y, tile_idx)
@@ -227,7 +225,7 @@ def run(mini_batch: List[str]) -> List[str]:
     Process a mini-batch of WSI file paths.
     
     Args:
-        mini_batch: List of absolute file paths to WSI files (.ndpi, .svs)
+        mini_batch: List of absolute file paths to WSI files (.ndpi)
         
     Returns:
         List of result strings (one per processed file) - required by Azure ML
@@ -240,10 +238,9 @@ def run(mini_batch: List[str]) -> List[str]:
             continue
         
         # Skip non-WSI files
-        if not file_path.lower().endswith(('.ndpi', '.svs')):
+        if not file_path.lower().endswith(('.ndpi')):
             logging.debug(f"Skipping non-WSI file: {file_path}")
             continue
-        
         try:
             path_obj = Path(file_path)
             result_info = tile_slide(path_obj)

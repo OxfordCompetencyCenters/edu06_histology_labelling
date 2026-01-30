@@ -157,7 +157,6 @@ def run(mini_batch: List[str]) -> List[str]:
         slide_id = trigger_path.name  # The file name is the slide ID
         
         # Source directory for this slide (from side input)
-        # Note: data_prep now creates subfolders per slide
         slide_src_dir = _tiles_base / slide_id
         
         # Destination directory for this slide
@@ -171,8 +170,6 @@ def run(mini_batch: List[str]) -> List[str]:
             continue
         
         # List all image files in the slide folder
-        # We manually enumerate here, which is fast because it's a single directory (per slide)
-        # instead of the root folder (all tiles)
         tile_files = list(slide_src_dir.glob("*.png")) + \
                      list(slide_src_dir.glob("*.jpg")) + \
                      list(slide_src_dir.glob("*.tif"))

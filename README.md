@@ -222,8 +222,6 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--segment_diameter` | `None` | Expected cell diameter in pixels (auto-estimated if None) |
 | `--segment_resample` | `False` | Enable resampling for better segmentation of variable-sized objects |
 | `--segment_normalize` | `True` | Normalize images before segmentation |
-| `--segment_do_3D` | `False` | Enable 3D segmentation (for Z-stacks) |
-| `--segment_stitch_threshold` | `0.0` | Threshold for stitching masks across tiles (0.0 = no stitching) |
 
 ### Clustering (ResNet-50 → UMAP → DBSCAN)
 | Parameter | Default | Description |

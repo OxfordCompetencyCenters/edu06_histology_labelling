@@ -18,6 +18,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Optional
+from cellpose import models
 
 import numpy as np
 from PIL import Image
@@ -43,7 +44,7 @@ def extract_slide_id_from_filename(filename: str) -> Optional[str]:
 
 def init():
     """
-    Initialize Cellpose model before processing mini-batches.
+    Initialize model before processing mini-batches.
     """
     global _args, _model, _output_base, _tiles_base, _manifest_base
     
@@ -62,7 +63,7 @@ def init():
                         help="Output directory for trigger files (one per slide)")
     parser.add_argument("--pretrained_model", type=str, default="cpsam",
                         help="Cellpose pretrained model")
-    # ... (other args same as before)
+
     parser.add_argument("--flow_threshold", type=float, default=0.4)
     parser.add_argument("--cellprob_threshold", type=float, default=0.0)
     parser.add_argument("--segment_use_gpu", action="store_true", default=False)
@@ -70,8 +71,7 @@ def init():
     parser.add_argument("--resample", action="store_true", default=True)
     parser.add_argument("--normalize", action="store_true", default=True)
     parser.add_argument("--no_normalize", action="store_true")
-    parser.add_argument("--do_3D", action="store_true")
-    parser.add_argument("--stitch_threshold", type=float, default=0.0)
+    parser.add_argument("--tile_batch_size", type=int, default=1)
     
     _args, _ = parser.parse_known_args()
     _output_base = Path(_args.output_path)
@@ -81,9 +81,6 @@ def init():
     
     _manifest_base = Path(_args.output_manifest)
     _manifest_base.mkdir(parents=True, exist_ok=True)
-    
-    # Load Cellpose model once
-    from cellpose import models
     
     logging.info(f"Loading Cellpose model: {_args.pretrained_model}")
     logging.info(f"  GPU: {_args.segment_use_gpu}")
@@ -96,45 +93,18 @@ def init():
         logging.info(f"Successfully loaded model: {_args.pretrained_model}")
     except Exception as e:
         logging.error(f"Failed to load model '{_args.pretrained_model}': {e}")
-        logging.info("Falling back to cyto2 model")
-        _model = models.CellposeModel(pretrained_model="cyto2", gpu=_args.segment_use_gpu)
     
     logging.info("Parallel segmentation (Slide-Level) initialized")
     logging.info(f"  Input Source: {_tiles_base}")
     logging.info(f"  Output path: {_output_base}")
 
 
-def segment_single_tile(img_path: Path, output_dir: Path) -> dict:
-    """
-    Run Cellpose segmentation on a single tile.
-    """
-    tile_name = img_path.stem
-    
-    # Load image
-    img = np.array(Image.open(img_path))
-    
-    # Determine normalization
-    normalize = _args.normalize and not _args.no_normalize
-    
-    # Run segmentation
-    masks, flows, diams = _model.eval(
-        img,
-        flow_threshold=_args.flow_threshold,
-        cellprob_threshold=_args.cellprob_threshold,
-        diameter=_args.diameter,
-        resample=_args.resample,
-        normalize=normalize,
-        do_3D=_args.do_3D,
-        stitch_threshold=_args.stitch_threshold
-    )
-    
-    # Save mask
+def save_segmentation_result(masks: np.ndarray, tile_name: str, output_dir: Path) -> dict:
+    """Save mask and extract bounding boxes for a single tile."""
     mask_img = Image.fromarray(masks.astype(np.uint16))
-    mask_filename = f"{tile_name}_mask.png"
-    mask_path = output_dir / mask_filename
+    mask_path = output_dir / f"{tile_name}_mask.png"
     mask_img.save(mask_path)
     
-    # Extract and save bounding boxes
     bboxes = []
     unique_labels = np.unique(masks)
     for lbl in unique_labels:
@@ -145,22 +115,36 @@ def segment_single_tile(img_path: Path, output_dir: Path) -> dict:
             continue
         min_row, max_row = coords[:, 0].min(), coords[:, 0].max()
         min_col, max_col = coords[:, 1].min(), coords[:, 1].max()
-        
         bboxes.append({
             "label_id": int(lbl),
             "bbox": [int(min_col), int(min_row), int(max_col), int(max_row)]
         })
     
-    bbox_filename = f"{tile_name}_bboxes.json"
-    bbox_path = output_dir / bbox_filename
+    bbox_path = output_dir / f"{tile_name}_bboxes.json"
     with open(bbox_path, "w") as f:
         json.dump(bboxes, f, indent=2)
     
-    return {
-        "mask_path": str(mask_path),
-        "bbox_path": str(bbox_path),
-        "num_cells": len(bboxes)
-    }
+    return {"mask_path": str(mask_path), "bbox_path": str(bbox_path), "num_cells": len(bboxes)}
+
+
+def segment_batch(img_paths: List[Path], output_dir: Path) -> List[dict]:
+    """Segment a batch of tiles in one model call."""
+    normalize = _args.normalize and not _args.no_normalize
+    images = [np.array(Image.open(p)) for p in img_paths]
+    
+    masks_list, flows_list, diams = _model.eval(
+        images,
+        flow_threshold=_args.flow_threshold,
+        cellprob_threshold=_args.cellprob_threshold,
+        diameter=_args.diameter,
+        resample=_args.resample,
+        normalize=normalize
+    )
+    
+    results = []
+    for img_path, masks in zip(img_paths, masks_list):
+        results.append(save_segmentation_result(masks, img_path.stem, output_dir))
+    return results
 
 
 def run(mini_batch: List[str]) -> List[str]:
@@ -188,16 +172,25 @@ def run(mini_batch: List[str]) -> List[str]:
                      list(slide_src_dir.glob("*.jpg")) + \
                      list(slide_src_dir.glob("*.tif"))
         
+        valid_tiles = [f for f in tile_files if '_mask.' not in f.name and '_bboxes.' not in f.name]
+        
         count = 0
-        for file_path in tile_files:
-            if '_mask.' in file_path.name or '_bboxes.' in file_path.name:
-                continue
-            
+        batch_size = _args.tile_batch_size
+        
+        for i in range(0, len(valid_tiles), batch_size):
+            batch = valid_tiles[i:i + batch_size]
             try:
-                result_info = segment_single_tile(file_path, slide_dst_dir)
-                count += result_info['num_cells']
+                batch_results = segment_batch(batch, slide_dst_dir)
+                for r in batch_results:
+                    count += r['num_cells']
             except Exception as e:
-                logging.error(f"Error segmenting {file_path}: {e}")
+                logging.error(f"Error segmenting batch starting at {batch[0]}: {e}")
+                for file_path in batch:
+                    try:
+                        tile_results = segment_batch([file_path], slide_dst_dir)
+                        count += tile_results[0]['num_cells']
+                    except Exception as inner_e:
+                        logging.error(f"Error segmenting {file_path}: {inner_e}")
         
         result = f"OK:{slide_id}:total_cells={count}"
         results.append(result)
