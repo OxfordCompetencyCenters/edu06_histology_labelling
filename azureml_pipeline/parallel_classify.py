@@ -26,7 +26,6 @@ Usage in pipeline:
 from __future__ import annotations
 import argparse
 import base64
-import glob
 import json
 import logging
 import os
@@ -37,13 +36,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PIL import Image
+from openai import OpenAI
 
-try:
-    from openai import OpenAI
-    import openai
-    HAS_OPENAI = True
-except ImportError:
-    HAS_OPENAI = False
+from utils import build_slide_to_bbox_files_mapping, get_tile_path_from_bbox_file
 
 
 # Global state initialized in init()
@@ -51,48 +46,6 @@ _args = None
 _output_base = None
 _client = None
 _slide_to_bbox_files = None  # Cache: slide_id -> list of bbox files
-
-
-def extract_slide_id_from_filename(filename: str) -> Optional[str]:
-    """
-    Extract slide_id from a tile/bbox filename.
-    
-    Filename format: {slide_id}__MAG_{mag}__X_{x}__Y_{y}__IDX_{idx}.png
-    or: {slide_id}__MAG_{mag}__X_{x}__Y_{y}__IDX_{idx}_bboxes.json
-    
-    Returns slide_id or None if pattern doesn't match.
-    """
-    match = re.match(r'^(.+?)__MAG_', filename)
-    if match:
-        return match.group(1)
-    return None
-
-
-def build_slide_to_bbox_files_mapping() -> Dict[str, List[str]]:
-    """
-    Build a mapping from slide_id to list of bbox files.
-    
-    Segmentation outputs are organized in slide subfolders:
-        segmentation_path/
-          slideA/
-            slideA__MAG_1d000__X_0__Y_0__IDX_000001_bboxes.json
-            ...
-          slideB/
-            slideB__MAG_1d000__X_0__Y_0__IDX_000001_bboxes.json
-            ...
-    """
-    mapping = defaultdict(list)
-    
-    # Find all bbox files in slide subfolders
-    bbox_files = glob.glob(os.path.join(_args.segmented_path, "*", "*_bboxes.json"))
-    
-    for bbox_file in bbox_files:
-        # Slide ID is the parent folder name
-        slide_id = os.path.basename(os.path.dirname(bbox_file))
-        mapping[slide_id].append(bbox_file)
-    
-    logging.info(f"Built slide mapping: {len(mapping)} slides, {len(bbox_files)} bbox files total")
-    return dict(mapping)
 
 
 def init():
@@ -127,9 +80,6 @@ def init():
     _output_base.mkdir(parents=True, exist_ok=True)
     
     # Initialize OpenAI client
-    if not HAS_OPENAI:
-        raise ImportError("OpenAI package not installed. Install with: pip install openai")
-    
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("No OPENAI_API_KEY found in environment!")
@@ -137,7 +87,7 @@ def init():
     _client = OpenAI(api_key=api_key)
     
     # Build slide-to-files mapping from flat structure
-    _slide_to_bbox_files = build_slide_to_bbox_files_mapping()
+    _slide_to_bbox_files = build_slide_to_bbox_files_mapping(_args.segmented_path)
     
     logging.info("Parallel classification initialized")
     logging.info(f"  Segmented path: {_args.segmented_path}")
@@ -149,22 +99,8 @@ def init():
 
 
 def get_tile_info(bbox_file: str) -> tuple:
-    """Helper function to derive tile/slide info from bbox_file path (per-slide subfolder structure)."""
-    try:
-        bbox_basename = os.path.basename(bbox_file)
-        tile_base_name = bbox_basename.replace("_bboxes.json", "")
-        tile_file_name = tile_base_name + ".png"
-        
-        # Extract slide_id from the parent folder name (bbox files are in per-slide subfolders)
-        slide_id = os.path.basename(os.path.dirname(bbox_file))
-        
-        # Tiles are in per-slide subfolders: prepped_tiles_path/slide_id/tile.png
-        tile_path = os.path.join(_args.prepped_tiles_path, slide_id, tile_file_name)
-        
-        return tile_path, tile_base_name, slide_id
-    except Exception as e:
-        logging.error(f"Error parsing info from bbox_file '{bbox_file}': {e}")
-        return None, None, None
+    """Helper function to derive tile/slide info from bbox_file path."""
+    return get_tile_path_from_bbox_file(bbox_file, _args.prepped_tiles_path)
 
 
 def classify_bbox_multimodal_llm(tile_image: Image.Image, bbox: List[int]) -> str:
@@ -291,9 +227,6 @@ def classify_slide(slide_id: str) -> dict:
             selected_for_classification.extend(top_n)
         
         logging.info(f"Selected {len(selected_for_classification)} cells for multimodal-LLM classification")
-        
-        # Build lookup for selected cells
-        ids_to_classify = set((entry["bbox_file"], entry["label_id"]) for entry in selected_for_classification)
         
         # Group selected by tile for efficient processing
         bboxes_by_tile = defaultdict(list)

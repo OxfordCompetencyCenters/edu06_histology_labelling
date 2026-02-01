@@ -32,10 +32,6 @@ _manifest_base = None
 
 
 def extract_slide_id_from_filename(filename: str) -> Optional[str]:
-    """
-    Extract slide_id from a tile filename.
-    Filename format: {slide_id}__MAG_{mag}__X_{x}__Y_{y}__IDX_{idx}.png
-    """
     match = re.match(r'^(.+?)__MAG_', filename)
     if match:
         return match.group(1)

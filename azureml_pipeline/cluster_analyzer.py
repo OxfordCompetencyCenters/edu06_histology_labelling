@@ -2,7 +2,6 @@
 import json
 import argparse
 import os
-import shutil
 import glob
 from collections import defaultdict
 from pathlib import Path

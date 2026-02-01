@@ -42,25 +42,12 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import normalize
 from torchvision import models, transforms
 
-# Conditionally import UMAP and cuML/CuPy
-try:
-    import umap
-    HAS_UMAP = True
-except ImportError:
-    HAS_UMAP = False
+import cupy as cp
+import umap
+from cuml.cluster import DBSCAN as GPUDbscan
+from kneed import KneeLocator
 
-try:
-    import cupy as cp
-    from cuml.cluster import DBSCAN as GPUDbscan
-    HAS_CUML = True
-except ImportError:
-    HAS_CUML = False
-
-try:
-    from kneed import KneeLocator
-    HAS_KNEED = True
-except ImportError:
-    HAS_KNEED = False
+from utils import build_slide_to_bbox_files_mapping
 
 
 # Global state initialized in init()
@@ -71,49 +58,6 @@ _model = None
 _transform = None
 _device = None
 _slide_to_files = None  # Cache: slide_id -> list of bbox files
-
-
-def extract_slide_id_from_filename(filename: str) -> Optional[str]:
-    """
-    Extract slide_id from a tile/bbox filename.
-    
-    Filename format: {slide_id}__MAG_{mag}__X_{x}__Y_{y}__IDX_{idx}.png
-    or: {slide_id}__MAG_{mag}__X_{x}__Y_{y}__IDX_{idx}_bboxes.json
-    
-    Returns slide_id or None if pattern doesn't match.
-    """
-    # Match everything before __MAG_
-    match = re.match(r'^(.+?)__MAG_', filename)
-    if match:
-        return match.group(1)
-    return None
-
-
-def build_slide_to_files_mapping() -> Dict[str, List[str]]:
-    """
-    Build a mapping from slide_id to list of bbox files.
-    
-    Segmentation outputs are organized in slide subfolders:
-        segmentation_path/
-          slideA/
-            slideA__MAG_1d000__X_0__Y_0__IDX_000001_bboxes.json
-            ...
-          slideB/
-            slideB__MAG_1d000__X_0__Y_0__IDX_000001_bboxes.json
-            ...
-    """
-    mapping = defaultdict(list)
-    
-    # Find all bbox files in slide subfolders
-    bbox_files = glob.glob(os.path.join(_args.segmentation_path, "*", "*_bboxes.json"))
-    
-    for bbox_file in bbox_files:
-        # Slide ID is the parent folder name
-        slide_id = os.path.basename(os.path.dirname(bbox_file))
-        mapping[slide_id].append(bbox_file)
-    
-    logging.info(f"Built slide mapping: {len(mapping)} slides, {len(bbox_files)} bbox files total")
-    return dict(mapping)
 
 
 def init():
@@ -194,7 +138,7 @@ def init():
     _transform = weights.transforms()
     
     # Build slide-to-files mapping from flat structure
-    _slide_to_files = build_slide_to_files_mapping()
+    _slide_to_files = build_slide_to_bbox_files_mapping(_args.segmentation_path)
     
     logging.info("Parallel clustering initialized")
     logging.info(f"  Segmentation path: {_args.segmentation_path}")
@@ -233,7 +177,7 @@ def extract_patch_embedding(
 def compute_cluster_confidence(embedding: np.ndarray, centroid: np.ndarray) -> float:
     """Compute confidence score based on distance to centroid."""
     dist = np.linalg.norm(embedding - centroid)
-    return float(1.0 / (1.0 + max(0, dist)))
+    return float(1.0 / (1.0 + dist))
 
 
 def find_optimal_eps(
@@ -253,7 +197,7 @@ def find_optimal_eps(
         kth_distances = distances[:, effective_k - 1]
         sorted_kth_distances = np.sort(kth_distances)
         
-        if HAS_KNEED and len(sorted_kth_distances) >= 3:
+        if len(sorted_kth_distances) >= 3:
             try:
                 x = np.arange(len(sorted_kth_distances))
                 kneedle = KneeLocator(
@@ -387,7 +331,7 @@ def cluster_slide(slide_id: str) -> dict:
         embeddings_np = normalize(embeddings_np, norm='l2', axis=1)
     
     # Optional: UMAP dimensionality reduction
-    if _args.use_umap and HAS_UMAP:
+    if _args.use_umap:
         try:
             reducer = umap.UMAP(
                 n_neighbors=_args.umap_n_neighbors,
@@ -427,7 +371,7 @@ def cluster_slide(slide_id: str) -> dict:
     
     # Run DBSCAN
     labels = None
-    use_gpu_dbscan = _args.gpu and HAS_CUML
+    use_gpu_dbscan = _args.gpu
     
     if use_gpu_dbscan:
         try:
