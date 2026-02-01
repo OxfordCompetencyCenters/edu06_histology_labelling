@@ -94,14 +94,14 @@ pip install -r requirements.txt
 
 Or install manually:
 ```bash
-pip install azure-ai-ml azure-identity python-dotenv
+pip install "azure-ai-ml>=1.12.0" "azure-identity>=1.14.0" "python-dotenv>=1.0.0"
 ```
 
-| Package | Purpose |
-|---------|----------|
-| `azure-ai-ml` | Azure ML SDK v2 for pipeline definition and job submission |
-| `azure-identity` | Azure authentication (DefaultAzureCredential) |
-| `python-dotenv` | Load environment variables from `.env` file |
+| Package | Version | Purpose |
+|---------|---------|----------|
+| `azure-ai-ml` | >=1.12.0 | Azure ML SDK v2 for pipeline definition and job submission |
+| `azure-identity` | >=1.14.0 | Azure authentication (DefaultAzureCredential) |
+| `python-dotenv` | >=1.0.0 | Load environment variables from `.env` file |
 
 > **Note**: These are separate from the pipeline component dependencies (defined in `azureml_pipeline/environment.yml`), which are installed in the Azure ML compute environment.
 
@@ -222,6 +222,7 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | `--segment_diameter` | `None` | Expected cell diameter in pixels (auto-estimated if None) |
 | `--segment_resample` | `False` | Enable resampling for better segmentation of variable-sized objects |
 | `--segment_normalize` | `True` | Normalize images before segmentation |
+| `--segmentation_tile_batch_size` | `1` | Number of tiles to segment in a single batch (higher = faster on GPU, more VRAM) |
 
 ### Clustering (ResNet-50 → UMAP → DBSCAN)
 | Parameter | Default | Description |
