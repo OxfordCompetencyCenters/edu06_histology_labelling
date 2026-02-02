@@ -396,7 +396,7 @@ This project relies on several open-source libraries. Please cite them if you us
 
 ### Cellpose
 
-**Main Paper:**
+**Main Paper (Cellpose 1.0):**
 Stringer, C., Wang, T., Michaelos, M., & Pachitariu, M. (2021). Cellpose: a generalist algorithm for cellular segmentation. *Nature Methods*, 18(1), 100-106.
 
 ```bibtex
@@ -408,6 +408,46 @@ Stringer, C., Wang, T., Michaelos, M., & Pachitariu, M. (2021). Cellpose: a gene
   number={1},
   pages={100--106},
   year={2021},
+  publisher={Nature Publishing Group}
+}
+```
+
+**Cellpose-SAM:**
+Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. *bioRxiv*.
+
+```bibtex
+@article{pachitariu2025cellposesam,
+  title={Cellpose-SAM: superhuman generalization for cellular segmentation},
+  author={Pachitariu, Marius and Rariden, Mark and Stringer, Carsen},
+  journal={bioRxiv},
+  year={2025},
+  publisher={Cold Spring Harbor Laboratory}
+}
+```
+
+**Cellpose 2.0 (Human-in-the-loop training):**
+Pachitariu, M. & Stringer, C. (2022). Cellpose 2.0: how to train your own model. *Nature Methods*, 1-8.
+
+```bibtex
+@article{pachitariu2022cellpose,
+  title={Cellpose 2.0: how to train your own model},
+  author={Pachitariu, Marius and Stringer, Carsen},
+  journal={Nature Methods},
+  pages={1--8},
+  year={2022},
+  publisher={Nature Publishing Group}
+}
+```
+
+**Cellpose 3.0 (Image restoration & cyto3):**
+Stringer, C. & Pachitariu, M. (2025). Cellpose3: one-click image restoration for improved segmentation. *Nature Methods*.
+
+```bibtex
+@article{stringer2025cellpose3,
+  title={Cellpose3: one-click image restoration for improved segmentation},
+  author={Stringer, Carsen and Pachitariu, Marius},
+  journal={Nature Methods},
+  year={2025},
   publisher={Nature Publishing Group}
 }
 ```
