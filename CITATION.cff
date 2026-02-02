@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "edu06_histology_labelling: Azure ML pipeline for automated histology image analysis"
+title: "Azure ML pipeline for cell segmentation, clustering, and classification in histology slides"
 message: "If you use this software, please cite it as below."
 type: software
 authors:
@@ -11,9 +11,9 @@ license: MIT
 repository-code: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
 url: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
 abstract: >
-  An Azure ML pipeline for automated histology image analysis combining 
-  cell segmentation (Cellpose), feature clustering (DBSCAN/UMAP), and 
-  AI-powered classification (multimodal-LLM). Includes smart tile filtering 
+  An Azure ML pipeline for automated histology slides' analyses combining 
+  cell segmentation (Cellpose), clustering (ResNet -> UMAP -> DBSCAN), and 
+  experimental classification (multimodal-LLM). Includes smart tile filtering 
   for improved processing efficiency.
 keywords:
   - histology
@@ -24,6 +24,7 @@ keywords:
   - multimodal-LLM
   - image-analysis
   - medical-imaging
+  - whole-slide-imaging
 version: "0.1.0"
-date-released: "2026-01-14"
+date-released: "2026-02-02"
 # doi: ""  # Add Zenodo DOI after minting
