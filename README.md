@@ -399,178 +399,44 @@ This project relies on several open-source libraries. Please cite them if you us
 **Main Paper (Cellpose 1.0):**
 Stringer, C., Wang, T., Michaelos, M., & Pachitariu, M. (2021). Cellpose: a generalist algorithm for cellular segmentation. *Nature Methods*, 18(1), 100-106.
 
-```bibtex
-@article{stringer2021cellpose,
-  title={Cellpose: a generalist algorithm for cellular segmentation},
-  author={Stringer, Carsen and Wang, Tim and Michaelos, Michalis and Pachitariu, Marius},
-  journal={Nature Methods},
-  volume={18},
-  number={1},
-  pages={100--106},
-  year={2021},
-  publisher={Nature Publishing Group}
-}
-```
-
 **Cellpose-SAM:**
 Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. *bioRxiv*.
-
-```bibtex
-@article{pachitariu2025cellposesam,
-  title={Cellpose-SAM: superhuman generalization for cellular segmentation},
-  author={Pachitariu, Marius and Rariden, Mark and Stringer, Carsen},
-  journal={bioRxiv},
-  year={2025},
-  publisher={Cold Spring Harbor Laboratory}
-}
-```
 
 **Cellpose 2.0 (Human-in-the-loop training):**
 Pachitariu, M. & Stringer, C. (2022). Cellpose 2.0: how to train your own model. *Nature Methods*, 1-8.
 
-```bibtex
-@article{pachitariu2022cellpose,
-  title={Cellpose 2.0: how to train your own model},
-  author={Pachitariu, Marius and Stringer, Carsen},
-  journal={Nature Methods},
-  pages={1--8},
-  year={2022},
-  publisher={Nature Publishing Group}
-}
-```
-
 **Cellpose 3.0 (Image restoration & cyto3):**
 Stringer, C. & Pachitariu, M. (2025). Cellpose3: one-click image restoration for improved segmentation. *Nature Methods*.
-
-```bibtex
-@article{stringer2025cellpose3,
-  title={Cellpose3: one-click image restoration for improved segmentation},
-  author={Stringer, Carsen and Pachitariu, Marius},
-  journal={Nature Methods},
-  year={2025},
-  publisher={Nature Publishing Group}
-}
-```
 
 **U-Net (cyto/cyto2 models):**
 Ronneberger, O., Fischer, P., & Brox, T. (2015). U-net: Convolutional networks for biomedical image segmentation. *arXiv preprint arXiv:1505.04597*.
 
-```bibtex
-@article{ronneberger2015u,
-  title={U-net: Convolutional networks for biomedical image segmentation},
-  author={Ronneberger, Olaf and Fischer, Philipp and Brox, Thomas},
-  journal={arXiv preprint arXiv:1505.04597},
-  year={2015}
-}
-```
-
 **LIVECell (livecell model):**
 Edlund, C., Jackson, T. L., Madej, T., Fuhrmann, J., & Rittscher, J. (2021). LIVECell—A large, high-quality, manually annotated dataset for label-free live cell segmentation. *Nature methods*, 18(9), 1038-1041.
-
-```bibtex
-@article{edlund2021livecell,
-  title={LIVECell—A large, high-quality, manually annotated dataset for label-free live cell segmentation},
-  author={Edlund, Christoffer and Jackson, T-Y Linus and Madej, Tomasz and Fuhrmann, Jiri and Rittscher, Jens},
-  journal={Nature methods},
-  volume={18},
-  number={9},
-  pages={1038--1041},
-  year={2021},
-  publisher={Nature Publishing Group}
-}
-```
 
 ### ResNet
 
 He, K., Zhang, X., Ren, S., & Sun, J. (2016). Deep residual learning for image recognition. In *Proceedings of the IEEE conference on computer vision and pattern recognition* (pp. 770-778).
 
-```bibtex
-@inproceedings{he2016deep,
-  title={Deep residual learning for image recognition},
-  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
-  booktitle={Proceedings of the IEEE conference on computer vision and pattern recognition},
-  pages={770--778},
-  year={2016}
-}
-```
-
 ### PyTorch
 
 Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G., ... & Chintala, S. (2019). PyTorch: An imperative style, high-performance deep learning library. In *Advances in neural information processing systems* (pp. 8024-8035).
-
-```bibtex
-@inproceedings{paszke2019pytorch,
-  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
-  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and others},
-  booktitle={Advances in Neural Information Processing Systems 32},
-  pages={8024--8035},
-  year={2019},
-  publisher={Curran Associates, Inc.}
-}
-```
 
 ### Scikit-learn
 
 Pedregosa, F., Varoquaux, G., Gramfort, A., Michel, V., Thirion, B., Grisel, O., ... & Duchesnay, E. (2011). Scikit-learn: Machine learning in Python. *Journal of machine learning research*, 12(Oct), 2825-2830.
 
-```bibtex
-@article{scikit-learn,
-  title={Scikit-learn: Machine Learning in {P}ython},
-  author={Pedregosa, F. and Varoquaux, G. and Gramfort, A. and Michel, V.
-          and Thirion, B. and Grisel, O. and Blondel, M. and Prettenhofer, P.
-          and Weiss, R. and Dubourg, V. and Vanderplas, J. and Passos, A. and
-          Cournapeau, D. and Brucher, M. and Perrot, M. and Duchesnay, E.},
-  journal={Journal of Machine Learning Research},
-  volume={12},
-  pages={2825--2830},
-  year={2011}
-}
-```
-
 ### OpenCV
 
 Bradski, G. (2000). The OpenCV Library. *Dr. Dobb's Journal of Software Tools*.
-
-```bibtex
-@article{bradski2000opencv,
-  title={The OpenCV Library},
-  author={Bradski, G.},
-  journal={Dr. Dobb's Journal of Software Tools},
-  year={2000}
-}
-```
 
 ### RAPIDS (CuPy and cuML)
 
 The RAPIDS Team. (2019). RAPIDS: Open GPU Data Science. In *Proceedings of the 2019 IEEE International Conference on Big Data (Big Data)* (pp. 5348-5349).
 
-```bibtex
-@inproceedings{rapids2019,
-  author = {The RAPIDS Team},
-  title = {{RAPIDS}: Open GPU Data Science},
-  booktitle = {Proceedings of the 2019 IEEE International Conference on Big Data (Big Data)},
-  year = {2019},
-  pages = {5348-5349},
-  doi = {10.1109/BigData47090.2019.9006348}
-}
-```
-
 ### Kneed
 
 Arun Raj, K., & N, A. (2021). *arun-raj-ag/kneed: v0.8.1*. Zenodo. https://doi.org/10.5281/zenodo.5525221
-
-```bibtex
-@misc{arun_raj_2021_5525221,
-  author       = {Arun Raj, Kevin and N, Aarshay},
-  title        = {arun-raj-ag/kneed: v0.8.1},
-  month        = sep,
-  year         = 2021,
-  publisher    = {Zenodo},
-  version      = {v0.8.1},
-  doi          = {10.5281/zenodo.5525221},
-  url          = {https://doi.org/10.5281/zenodo.5525221}
-}
-```
 
 ## License
 
