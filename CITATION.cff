@@ -26,6 +26,6 @@ keywords:
   - image-analysis
   - medical-imaging
   - whole-slide-imaging
-version: "0.1.0"
+version: "1.0.0"
 date-released: "2026-02-02"
 # doi: ""  # Add Zenodo DOI after minting
