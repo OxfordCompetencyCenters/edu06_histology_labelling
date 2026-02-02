@@ -446,7 +446,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- [Damion Young](https://www.medsci.ox.ac.uk/for-staff/staff/damion-young) and [Sharmila Rajendran](https://www.medsci.ox.ac.uk/for-staff/resources/educational-strategy-and-quality-assurance/teaching-excellence-awards/teaching-excellence-awards-2025) from [University of Oxford Medical Sciences Division](https://www.medsci.ox.ac.uk/) for ideating and formulating the research problem.
+- [Damion Young](https://www.medsci.ox.ac.uk/for-staff/staff/damion-young) and [Sharmila Rajendran](http://dpag.ox.ac.uk/team/sharmila-saran-rajendran) from [University of Oxford Medical Sciences Division](https://www.medsci.ox.ac.uk/) for ideating and formulating the research problem.
 - [University of Oxford AI Competency Center](https://oerc.ox.ac.uk/ai-centre) for supporting this research
 - [Cellpose](https://github.com/MouseLand/cellpose) for cell segmentation (including Cellpose-SAM)
 - [OpenAI](https://openai.com/) for multimodal-LLM vision capabilities
