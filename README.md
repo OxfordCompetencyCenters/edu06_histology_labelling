@@ -1,7 +1,7 @@
 # edu06_histology_labelling
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-<!-- [![DOI](https://zenodo.org/badge/DOI/YOUR_DOI_HERE.svg)](https://doi.org/YOUR_DOI_HERE) -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18458496.svg)](https://doi.org/10.5281/zenodo.18458496)
 
 Azure ML pipeline for automated histology image analysis combining deep learning segmentation, neural embedding, dimensionality reduction, and unsupervised clustering to identify and group cellular structures in whole slide images (WSI).
 
