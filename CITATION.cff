@@ -13,8 +13,9 @@ url: "https://github.com/OxfordCompetencyCenters/edu06_histology_labelling"
 abstract: >
   An Azure ML pipeline for automated histology slides' analyses combining 
   cell segmentation (Cellpose), clustering (ResNet -> UMAP -> DBSCAN), and 
-  experimental classification (multimodal-LLM). Includes smart tile filtering 
-  for improved processing efficiency.
+  experimental classification (multimodal-LLM). Includes various other features
+  such as magnification level, tile filtering for improved processing efficiency,
+  slide-level parallelization.
 keywords:
   - histology
   - cell-segmentation
