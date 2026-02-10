@@ -16,12 +16,16 @@ import json
 import logging
 import os
 import re
+import sys
+import traceback
 from pathlib import Path
 from typing import List, Optional
 from cellpose import models
 
 import numpy as np
 from PIL import Image
+
+from utils import log_and_print, log_exception
 
 # Global state initialized in init()
 _args = None
@@ -78,21 +82,21 @@ def init():
     _manifest_base = Path(_args.output_manifest)
     _manifest_base.mkdir(parents=True, exist_ok=True)
     
-    logging.info(f"Loading Cellpose model: {_args.pretrained_model}")
-    logging.info(f"  GPU: {_args.segment_use_gpu}")
+    log_and_print(f"Loading Cellpose model: {_args.pretrained_model}")
+    log_and_print(f"  GPU: {_args.segment_use_gpu}")
     
     try:
         _model = models.CellposeModel(
             pretrained_model=_args.pretrained_model,
             gpu=_args.segment_use_gpu
         )
-        logging.info(f"Successfully loaded model: {_args.pretrained_model}")
+        log_and_print(f"Successfully loaded model: {_args.pretrained_model}")
     except Exception as e:
-        logging.error(f"Failed to load model '{_args.pretrained_model}': {e}")
+        log_exception(f"Failed to load model '{_args.pretrained_model}'", e)
     
-    logging.info("Parallel segmentation (Slide-Level) initialized")
-    logging.info(f"  Input Source: {_tiles_base}")
-    logging.info(f"  Output path: {_output_base}")
+    log_and_print("Parallel segmentation (Slide-Level) initialized")
+    log_and_print(f"  Input Source: {_tiles_base}")
+    log_and_print(f"  Output path: {_output_base}")
 
 
 def save_segmentation_result(masks: np.ndarray, tile_name: str, output_dir: Path) -> dict:
@@ -157,9 +161,9 @@ def run(mini_batch: List[str]) -> List[str]:
         slide_dst_dir = _output_base / slide_id
         slide_dst_dir.mkdir(parents=True, exist_ok=True)
         
-        logging.info(f"Processing slide: {slide_id}")
+        log_and_print(f"Processing slide: {slide_id}")
         if not slide_src_dir.exists():
-            logging.warning(f"Slide folder not found: {slide_src_dir}")
+            log_and_print(f"Slide folder not found: {slide_src_dir}", level="warning")
             results.append(f"MISSING:{slide_id}")
             continue
             
@@ -180,22 +184,22 @@ def run(mini_batch: List[str]) -> List[str]:
                 for r in batch_results:
                     count += r['num_cells']
             except Exception as e:
-                logging.error(f"Error segmenting batch starting at {batch[0]}: {e}")
+                log_exception(f"Error segmenting batch starting at {batch[0]}", e)
                 for file_path in batch:
                     try:
                         tile_results = segment_batch([file_path], slide_dst_dir)
                         count += tile_results[0]['num_cells']
                     except Exception as inner_e:
-                        logging.error(f"Error segmenting {file_path}: {inner_e}")
+                        log_exception(f"Error segmenting {file_path}", inner_e)
         
         result = f"OK:{slide_id}:total_cells={count}"
         results.append(result)
-        logging.info(result)
+        log_and_print(result)
         
         # Create trigger file for downstream stages (cluster, classify)
         trigger_file = _manifest_base / slide_id
         trigger_file.touch()
-        logging.info(f"Created trigger file: {trigger_file}")
+        log_and_print(f"Created trigger file: {trigger_file}")
     
     return results
 
@@ -204,4 +208,38 @@ def shutdown():
     """Cleanup after all mini-batches processed."""
     global _model
     _model = None
-    logging.info("Parallel segmentation shutdown complete")
+    log_and_print("Parallel segmentation shutdown complete")
+
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) entry point
+# --------------------------------------------------------------------------- #
+def run_all() -> None:
+    """
+    Process ALL slide folders sequentially.
+    Used when running as a command() job (max_nodes=1) for easier debugging.
+    The input tiles base (_tiles_base) is set by init().
+    """
+    init()
+    # Find all slide subdirectories in the tiles input folder
+    slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
+    log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
+
+    all_results = []
+    for slide_dir in sorted(slide_dirs):
+        slide_id = slide_dir.name
+        log_and_print(f"[Sequential] Processing slide: {slide_id}")
+        # Create a fake trigger file path (run() only uses the filename)
+        fake_trigger = str(_tiles_base / slide_id)
+        results = run([fake_trigger])
+        all_results.extend(results)
+        for r in results:
+            log_and_print(f"  -> {r}")
+
+    log_and_print(f"[Sequential] Segmentation complete. {len(all_results)} slides processed.")
+    shutdown()
+
+
+if __name__ == "__main__":
+    # All args are parsed by init() via parse_known_args
+    run_all()

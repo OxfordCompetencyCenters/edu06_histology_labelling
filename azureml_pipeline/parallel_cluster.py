@@ -29,6 +29,8 @@ import json
 import logging
 import os
 import re
+import sys
+import traceback
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -47,7 +49,7 @@ import umap
 from cuml.cluster import DBSCAN as GPUDbscan
 from kneed import KneeLocator
 
-from utils import build_slide_to_bbox_files_mapping
+from utils import build_slide_to_bbox_files_mapping, log_and_print, log_exception
 
 
 # Global state initialized in init()
@@ -126,10 +128,10 @@ def init():
     else:
         _device = torch.device("cpu")
         if _args.gpu:
-            logging.warning("GPU requested but CUDA not available. Using CPU.")
+            log_and_print("GPU requested but CUDA not available. Using CPU.", level="warning")
     
     # Load ResNet50 model for embedding extraction
-    logging.info(f"Loading ResNet50 model for embedding extraction on {_device}")
+    log_and_print(f"Loading ResNet50 model for embedding extraction on {_device}")
     weights = models.ResNet50_Weights.IMAGENET1K_V1
     _model = models.resnet50(weights=weights)
     _model.fc = nn.Identity()  # Get 2048-dim embedding
@@ -140,13 +142,13 @@ def init():
     # Build slide-to-files mapping from flat structure
     _slide_to_files = build_slide_to_bbox_files_mapping(_args.segmentation_path)
     
-    logging.info("Parallel clustering initialized")
-    logging.info(f"  Segmentation path: {_args.segmentation_path}")
-    logging.info(f"  Prepped tiles path: {_args.prepped_tiles_path}")
-    logging.info(f"  Output path: {_output_base}")
-    logging.info(f"  Device: {_device}")
-    logging.info(f"  UMAP enabled: {_args.use_umap}")
-    logging.info(f"  Discovered {len(_slide_to_files)} unique slide IDs")
+    log_and_print("Parallel clustering initialized")
+    log_and_print(f"  Segmentation path: {_args.segmentation_path}")
+    log_and_print(f"  Prepped tiles path: {_args.prepped_tiles_path}")
+    log_and_print(f"  Output path: {_output_base}")
+    log_and_print(f"  Device: {_device}")
+    log_and_print(f"  UMAP enabled: {_args.use_umap}")
+    log_and_print(f"  Discovered {len(_slide_to_files)} unique slide IDs")
 
 
 def extract_patch_embedding(
@@ -171,6 +173,7 @@ def extract_patch_embedding(
         return embedding.cpu().numpy().squeeze()
     except Exception as e:
         logging.debug(f"Error extracting embedding for bbox {bbox}: {e}")
+        print(f"[DEBUG] Error extracting embedding for bbox {bbox}: {e}", flush=True)
         return None
 
 
@@ -217,7 +220,7 @@ def find_optimal_eps(
         return float(fallback_eps)
     
     except Exception as e:
-        logging.error(f"Error during k-distance calculation: {e}")
+        log_exception(f"Error during k-distance calculation", e)
         return None
 
 
@@ -226,7 +229,7 @@ def get_bbox_file_list_for_slide(slide_id: str) -> List[Tuple[str, str]]:
     
     # Get bbox files for this slide from the cached mapping
     if slide_id not in _slide_to_files:
-        logging.warning(f"Slide ID '{slide_id}' not found in mapping")
+        log_and_print(f"Slide ID '{slide_id}' not found in mapping", level="warning")
         return []
     
     bbox_files = _slide_to_files[slide_id]
@@ -245,6 +248,7 @@ def get_bbox_file_list_for_slide(slide_id: str) -> List[Tuple[str, str]]:
             valid_pairs.append((bbox_file, tile_path))
         else:
             logging.debug(f"Tile not found: {tile_path}")
+            print(f"[DEBUG] Tile not found: {tile_path}", flush=True)
     
     return valid_pairs
 
@@ -267,7 +271,7 @@ def cluster_slide(slide_id: str) -> dict:
     bbox_tile_pairs = get_bbox_file_list_for_slide(slide_id)
     
     if not bbox_tile_pairs:
-        logging.warning(f"No valid bbox/tile pairs found for slide {slide_id}")
+        log_and_print(f"No valid bbox/tile pairs found for slide {slide_id}", level="warning")
         return {
             "slide_id": slide_id,
             "num_embeddings": 0,
@@ -277,7 +281,7 @@ def cluster_slide(slide_id: str) -> dict:
             "error": "No bbox/tile pairs found"
         }
     
-    logging.info(f"Processing {len(bbox_tile_pairs)} bbox/tile pairs for {slide_id}")
+    log_and_print(f"Processing {len(bbox_tile_pairs)} bbox/tile pairs for {slide_id}")
     
     # Extract embeddings
     embeddings = []
@@ -310,10 +314,10 @@ def cluster_slide(slide_id: str) -> dict:
             tile_img.close()
             
         except Exception as e:
-            logging.error(f"Error processing {bbox_file}: {e}")
+            log_exception(f"Error processing {bbox_file}", e)
     
     if not embeddings:
-        logging.warning(f"No embeddings extracted for slide {slide_id}")
+        log_and_print(f"No embeddings extracted for slide {slide_id}", level="warning")
         return {
             "slide_id": slide_id,
             "num_embeddings": 0,
@@ -324,7 +328,7 @@ def cluster_slide(slide_id: str) -> dict:
         }
     
     embeddings_np = np.array(embeddings, dtype=np.float32)
-    logging.info(f"Extracted {len(embeddings_np)} embeddings for {slide_id}")
+    log_and_print(f"Extracted {len(embeddings_np)} embeddings for {slide_id}")
     
     # Optional: Normalize embeddings
     if _args.normalize_embeddings:
@@ -343,13 +347,13 @@ def cluster_slide(slide_id: str) -> dict:
                 verbose=False
             )
             embeddings_np = reducer.fit_transform(embeddings_np)
-            logging.info(f"UMAP reduced to {embeddings_np.shape[1]} dimensions for {slide_id}")
+            log_and_print(f"UMAP reduced to {embeddings_np.shape[1]} dimensions for {slide_id}")
         except Exception as e:
-            logging.error(f"UMAP failed for {slide_id}: {e}")
+            log_exception(f"UMAP failed for {slide_id}", e)
     
     # Check minimum samples
     if len(embeddings_np) < _args.min_samples:
-        logging.warning(f"Too few embeddings ({len(embeddings_np)}) for DBSCAN on {slide_id}")
+        log_and_print(f"Too few embeddings ({len(embeddings_np)}) for DBSCAN on {slide_id}", level="warning")
         return {
             "slide_id": slide_id,
             "num_embeddings": len(embeddings_np),
@@ -365,9 +369,9 @@ def cluster_slide(slide_id: str) -> dict:
         chosen_eps = find_optimal_eps(embeddings_np, _args.min_samples, str(slide_output_path))
         if chosen_eps is None or chosen_eps <= 0:
             chosen_eps = 0.5  # Default fallback
-            logging.warning(f"Using fallback eps={chosen_eps} for {slide_id}")
+            log_and_print(f"Using fallback eps={chosen_eps} for {slide_id}", level="warning")
     
-    logging.info(f"Using eps={chosen_eps:.4f} for {slide_id}")
+    log_and_print(f"Using eps={chosen_eps:.4f} for {slide_id}")
     
     # Run DBSCAN
     labels = None
@@ -382,7 +386,7 @@ def cluster_slide(slide_id: str) -> dict:
             del embeddings_gpu
             cp.get_default_memory_pool().free_all_blocks()
         except Exception as e:
-            logging.error(f"cuML DBSCAN failed for {slide_name}: {e}. Falling back to CPU.")
+            log_exception(f"cuML DBSCAN failed for {slide_id}. Falling back to CPU.", e)
             use_gpu_dbscan = False
     
     if not use_gpu_dbscan:
@@ -429,7 +433,7 @@ def cluster_slide(slide_id: str) -> dict:
     n_clusters = len(unique_labels - {-1})
     n_noise = list(labels).count(-1)
     
-    logging.info(f"Clustering results for {slide_id}: {n_clusters} clusters, {n_noise} noise points")
+    log_and_print(f"Clustering results for {slide_id}: {n_clusters} clusters, {n_noise} noise points")
     
     return {
         "slide_id": slide_id,
@@ -463,11 +467,11 @@ def run(mini_batch: List[str]) -> List[str]:
         # Extract slide_id from trigger filename
         slide_id = trigger_path.name
         
-        logging.info(f"Processing slide from trigger: {slide_id}")
+        log_and_print(f"Processing slide from trigger: {slide_id}")
         
         # Verify slide exists in our mapping (built during init)
         if slide_id not in _slide_to_files:
-            logging.warning(f"Slide ID '{slide_id}' not in pre-built mapping, skipping")
+            log_and_print(f"Slide ID '{slide_id}' not in pre-built mapping, skipping", level="warning")
             results.append(f"SKIP:{slide_id}:not_in_mapping")
             continue
         
@@ -482,13 +486,13 @@ def run(mini_batch: List[str]) -> List[str]:
                 # Create trigger file for downstream steps (classify)
                 out_trigger = _manifest_base / slide_id
                 out_trigger.touch()
-                logging.info(f"Created trigger file: {out_trigger}")
+                log_and_print(f"Created trigger file: {out_trigger}")
             
-            logging.info(f"Finished clustering {slide_id}: {result_info['num_clusters']} clusters from {result_info['num_embeddings']} embeddings")
+            log_and_print(f"Finished clustering {slide_id}: {result_info['num_clusters']} clusters from {result_info['num_embeddings']} embeddings")
             results.append(result)
             
         except Exception as e:
-            logging.error(f"Error clustering {slide_id}: {e}")
+            log_exception(f"Error clustering {slide_id}", e)
             results.append(f"ERROR:{slide_id}:{str(e)}")
     
     return results
@@ -498,4 +502,36 @@ def shutdown():
     """Cleanup after all mini-batches processed."""
     global _model
     _model = None
-    logging.info("Parallel clustering shutdown complete")
+    log_and_print("Parallel clustering shutdown complete")
+
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) entry point
+# --------------------------------------------------------------------------- #
+def run_all() -> None:
+    """
+    Process ALL slides sequentially.
+    Used when running as a command() job (max_nodes=1) for easier debugging.
+    Slide IDs are discovered from the segmentation output subfolders.
+    """
+    init()
+    slide_ids = sorted(_slide_to_files.keys())
+    log_and_print(f"[Sequential] Found {len(slide_ids)} slides to cluster")
+
+    all_results = []
+    for slide_id in slide_ids:
+        log_and_print(f"[Sequential] Clustering slide: {slide_id}")
+        # Create a fake trigger file path (run() only uses the filename)
+        fake_trigger = os.path.join(_args.segmentation_path, slide_id)
+        results = run([fake_trigger])
+        all_results.extend(results)
+        for r in results:
+            log_and_print(f"  -> {r}")
+
+    log_and_print(f"[Sequential] Clustering complete. {len(all_results)} slides processed.")
+    shutdown()
+
+
+if __name__ == "__main__":
+    # All args are parsed by init() via parse_known_args
+    run_all()

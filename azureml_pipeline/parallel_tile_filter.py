@@ -22,12 +22,16 @@ import json
 import logging
 import os
 import shutil
+import sys
+import traceback
 from pathlib import Path
 from typing import List
 
 import cv2
 import numpy as np
 from PIL import Image
+
+from utils import log_and_print, log_exception
 
 
 # Global state
@@ -75,10 +79,10 @@ def init():
         _manifest_out_base = Path(_args.output_manifest_path)
         _manifest_out_base.mkdir(parents=True, exist_ok=True)
     
-    logging.info("Parallel tile filter (Slide-Level) initialized")
-    logging.info(f"  Input Source: {_tiles_base}")
-    logging.info(f"  Output Path: {_output_base}")
-    logging.info(f"  Manifest Output: {_manifest_out_base}")
+    log_and_print("Parallel tile filter (Slide-Level) initialized")
+    log_and_print(f"  Input Source: {_tiles_base}")
+    log_and_print(f"  Output Path: {_output_base}")
+    log_and_print(f"  Manifest Output: {_manifest_out_base}")
 
 
 def calculate_tile_stats(image: np.ndarray) -> dict:
@@ -163,9 +167,9 @@ def run(mini_batch: List[str]) -> List[str]:
         slide_dst_dir = _output_base / slide_id
         slide_dst_dir.mkdir(parents=True, exist_ok=True)
         
-        logging.info(f"Processing slide: {slide_id}")
+        log_and_print(f"Processing slide: {slide_id}")
         if not slide_src_dir.exists():
-            logging.warning(f"Slide folder not found: {slide_src_dir}")
+            log_and_print(f"Slide folder not found: {slide_src_dir}", level="warning")
             results.append(f"MISSING:{slide_id}")
             continue
         
@@ -199,7 +203,7 @@ def run(mini_batch: List[str]) -> List[str]:
                     kept_count += 1
                     
             except Exception as e:
-                logging.error(f"Error processing {file_path}: {e}")
+                log_exception(f"Error processing {file_path}", e)
         
         # Create output trigger file if configured
         if _manifest_out_base:
@@ -207,11 +211,45 @@ def run(mini_batch: List[str]) -> List[str]:
             
         result = f"OK:{slide_id}:processed={processed_count}:kept={kept_count}"
         results.append(result)
-        logging.info(result)
+        log_and_print(result)
     
     return results
 
 
 def shutdown():
     """Cleanup after all mini-batches processed. Optional."""
-    logging.info("Parallel tile filter shutdown complete")
+    log_and_print("Parallel tile filter shutdown complete")
+
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) entry point
+# --------------------------------------------------------------------------- #
+def run_all() -> None:
+    """
+    Process ALL slide folders sequentially.
+    Used when running as a command() job (max_nodes=1) for easier debugging.
+    The input tiles base (_tiles_base) is set by init().
+    """
+    init()
+    # Find all slide subdirectories in the tiles input folder
+    slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
+    log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
+
+    all_results = []
+    for slide_dir in sorted(slide_dirs):
+        slide_id = slide_dir.name
+        log_and_print(f"[Sequential] Processing slide: {slide_id}")
+        # Create a fake trigger file path (run() only uses the filename)
+        fake_trigger = str(_tiles_base / slide_id)
+        results = run([fake_trigger])
+        all_results.extend(results)
+        for r in results:
+            log_and_print(f"  -> {r}")
+
+    log_and_print(f"[Sequential] Tile filtering complete. {len(all_results)} slides processed.")
+    shutdown()
+
+
+if __name__ == "__main__":
+    # All args are parsed by init() via parse_known_args
+    run_all()

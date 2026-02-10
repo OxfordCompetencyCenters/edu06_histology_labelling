@@ -22,11 +22,15 @@ import hashlib
 import logging
 import math
 import os
+import sys
+import traceback
 from pathlib import Path
 from typing import Generator, List, Tuple
 
 import openslide
 from PIL import Image
+
+from utils import log_and_print, log_exception
 
 
 # Global state initialized in init()
@@ -66,11 +70,11 @@ def init():
     _output_base = Path(_args.output_path)
     _output_base.mkdir(parents=True, exist_ok=True)
     
-    logging.info("Parallel data prep initialized")
-    logging.info(f"  Output path: {_output_base}")
-    logging.info(f"  Tile size: {_args.tile_size}")
-    logging.info(f"  Magnifications: {_args.magnifications}")
-    logging.info(f"  Flat output: {_args.flat_output}")
+    log_and_print("Parallel data prep initialized")
+    log_and_print(f"  Output path: {_output_base}")
+    log_and_print(f"  Tile size: {_args.tile_size}")
+    log_and_print(f"  Magnifications: {_args.magnifications}")
+    log_and_print(f"  Flat output: {_args.flat_output}")
 
 
 def parse_magnifications(mag_str: str) -> List[float]:
@@ -156,8 +160,8 @@ def tile_slide(slide_path: Path) -> dict:
         trigger_path = manifest_base / slide_id
         trigger_path.touch()
     
-    logging.info(f"Opening slide: {slide_path}")
-    logging.info(f"Slide ID: {slide_id}")
+    log_and_print(f"Opening slide: {slide_path}")
+    log_and_print(f"Slide ID: {slide_id}")
     
     slide = openslide.OpenSlide(str(slide_path))
     base_w, base_h = slide.dimensions
@@ -168,12 +172,12 @@ def tile_slide(slide_path: Path) -> dict:
         if mag <= 1.0:
             src_edge = int(round(tile_size / mag))
             if base_w < src_edge or base_h < src_edge:
-                logging.info(f"  Skipping mag {mag:.3f}: slide < {src_edge}px at this scale")
+                log_and_print(f"  Skipping mag {mag:.3f}: slide < {src_edge}px at this scale")
                 continue
         else:
             src_edge = tile_size
             if base_w < src_edge or base_h < src_edge:
-                logging.info(f"  Skipping mag {mag:.3f}: slide < {src_edge}px")
+                log_and_print(f"  Skipping mag {mag:.3f}: slide < {src_edge}px")
                 continue
         
         tiles_x = (base_w - src_edge) // src_edge + 1
@@ -181,7 +185,7 @@ def tile_slide(slide_path: Path) -> dict:
         stride = src_edge * compute_step_multiplier(tiles_x * tiles_y, num_tiles)
         
         est_tiles = ((base_w - src_edge) // stride + 1) * ((base_h - src_edge) // stride + 1)
-        logging.info(f"  Processing mag {mag:.3f}: ~{est_tiles} tiles")
+        log_and_print(f"  Processing mag {mag:.3f}: ~{est_tiles} tiles")
         
         for x, y in iter_grid_positions(base_w, base_h, src_edge, stride):
             region = slide.read_region((x, y), 0, (src_edge, src_edge)).convert("RGB")
@@ -245,11 +249,11 @@ def run(mini_batch: List[str]) -> List[str]:
             path_obj = Path(file_path)
             result_info = tile_slide(path_obj)
             result = f"OK:{file_path}:tiles={result_info['num_tiles']}"
-            logging.info(f"Finished {result_info['slide_name']} (ID: {result_info['slide_id']}): {result_info['num_tiles']} tiles")
+            log_and_print(f"Finished {result_info['slide_name']} (ID: {result_info['slide_id']}): {result_info['num_tiles']} tiles")
             results.append(result)
             
         except Exception as e:
-            logging.error(f"Error processing {file_path}: {e}")
+            log_exception(f"Error processing {file_path}", e)
             results.append(f"ERROR:{file_path}:{str(e)}")
     
     return results
@@ -257,4 +261,40 @@ def run(mini_batch: List[str]) -> List[str]:
 
 def shutdown():
     """Cleanup after all mini-batches processed. Optional."""
-    logging.info("Parallel data prep shutdown complete")
+    log_and_print("Parallel data prep shutdown complete")
+
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) entry point
+# --------------------------------------------------------------------------- #
+def run_all(input_data_path: str) -> None:
+    """
+    Process ALL WSI files in the input folder sequentially.
+    Used when running as a command() job (max_nodes=1) for easier debugging.
+    """
+    init()
+    input_dir = Path(input_data_path)
+    wsi_files = [f for f in input_dir.iterdir()
+                 if f.is_file() and f.suffix.lower() in ('.ndpi',)]
+    log_and_print(f"[Sequential] Found {len(wsi_files)} WSI files in {input_dir}")
+
+    all_results = []
+    for wsi in sorted(wsi_files):
+        log_and_print(f"[Sequential] Processing: {wsi.name}")
+        results = run([str(wsi)])
+        all_results.extend(results)
+        for r in results:
+            log_and_print(f"  -> {r}")
+
+    log_and_print(f"[Sequential] Data prep complete. {len(all_results)} slides processed.")
+    shutdown()
+
+
+if __name__ == "__main__":
+    import argparse as _ap
+    _p = _ap.ArgumentParser("Sequential data prep runner")
+    _p.add_argument("--input_data_path", required=True,
+                    help="Folder with WSI files to process")
+    # All other args are parsed by init() via parse_known_args
+    _ns, _ = _p.parse_known_args()
+    run_all(_ns.input_data_path)

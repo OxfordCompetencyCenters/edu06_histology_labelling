@@ -5,8 +5,45 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import sys
+import traceback
 from collections import defaultdict
 from typing import Dict, List, Optional
+
+
+# --------------------------------------------------------------------------- #
+# Dual logging: print() + logging for Azure ML parallel job visibility
+# --------------------------------------------------------------------------- #
+# Azure ML parallel jobs scatter output across multiple log files:
+#   - ~/logs/user/error/  (stderr / logging)
+#   - ~/logs/user/stdout/ (print / stdout)
+#   - 70_driver_log.txt   (driver stdout)
+# Using both print() and logging increases the odds of seeing messages.
+# --------------------------------------------------------------------------- #
+
+def log_and_print(msg: str, level: str = "info") -> None:
+    """Log a message via both logging and print (flushed) for maximum Azure ML visibility."""
+    logger = logging.getLogger()
+    if level == "debug":
+        logger.debug(msg)
+    elif level == "warning":
+        logger.warning(msg)
+    elif level == "error":
+        logger.error(msg)
+    elif level == "critical":
+        logger.critical(msg)
+    else:
+        logger.info(msg)
+    # Also print to stdout so it appears in 70_driver_log / stdout logs
+    print(f"[{level.upper()}] {msg}", flush=True)
+
+
+def log_exception(msg: str, exc: Exception | None = None) -> None:
+    """Log an error with full traceback via both logging and print."""
+    tb = traceback.format_exc()
+    full_msg = f"{msg}\n  Exception: {exc}\n  Traceback:\n{tb}" if exc else f"{msg}\n{tb}"
+    logging.error(full_msg)
+    print(f"[ERROR] {full_msg}", file=sys.stderr, flush=True)
 
 
 def build_slide_to_bbox_files_mapping(segmentation_path: str) -> Dict[str, List[str]]:

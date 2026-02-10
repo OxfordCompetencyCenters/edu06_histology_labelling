@@ -30,6 +30,8 @@ import json
 import logging
 import os
 import re
+import sys
+import traceback
 from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
@@ -38,7 +40,7 @@ from typing import Dict, List, Optional
 from PIL import Image
 from openai import OpenAI
 
-from utils import build_slide_to_bbox_files_mapping, get_tile_path_from_bbox_file
+from utils import build_slide_to_bbox_files_mapping, get_tile_path_from_bbox_file, log_and_print, log_exception
 
 
 # Global state initialized in init()
@@ -89,13 +91,13 @@ def init():
     # Build slide-to-files mapping from flat structure
     _slide_to_bbox_files = build_slide_to_bbox_files_mapping(_args.segmented_path)
     
-    logging.info("Parallel classification initialized")
-    logging.info(f"  Segmented path: {_args.segmented_path}")
-    logging.info(f"  Prepped tiles path: {_args.prepped_tiles_path}")
-    logging.info(f"  Clustered cells path: {_args.clustered_cells_path}")
-    logging.info(f"  Output path: {_output_base}")
-    logging.info(f"  Classify per cluster: {_args.classify_per_cluster}")
-    logging.info(f"  Discovered {len(_slide_to_bbox_files)} unique slide IDs")
+    log_and_print("Parallel classification initialized")
+    log_and_print(f"  Segmented path: {_args.segmented_path}")
+    log_and_print(f"  Prepped tiles path: {_args.prepped_tiles_path}")
+    log_and_print(f"  Clustered cells path: {_args.clustered_cells_path}")
+    log_and_print(f"  Output path: {_output_base}")
+    log_and_print(f"  Classify per cluster: {_args.classify_per_cluster}")
+    log_and_print(f"  Discovered {len(_slide_to_bbox_files)} unique slide IDs")
 
 
 def get_tile_info(bbox_file: str) -> tuple:
@@ -152,7 +154,7 @@ def classify_bbox_multimodal_llm(tile_image: Image.Image, bbox: List[int]) -> st
             label = "Undetermined"
         return label
     except Exception as e:
-        logging.error(f"Error during multimodal-LLM classification for bbox {bbox}: {e}")
+        log_exception(f"Error during multimodal-LLM classification for bbox {bbox}", e)
         if "rate" in str(e).lower():
             return "Error - Rate Limited"
         return "Error - Exception"
@@ -170,7 +172,7 @@ def load_cluster_assignments_for_slide(slide_name: str) -> Optional[List[Dict]]:
             with open(slide_cluster_path, "r") as f:
                 return json.load(f)
         except Exception as e:
-            logging.error(f"Failed to load cluster assignments from {slide_cluster_path}: {e}")
+            log_exception(f"Failed to load cluster assignments from {slide_cluster_path}", e)
     
     # Fallback to global format - filter for this slide
     global_path = os.path.join(_args.clustered_cells_path, "cluster_assignments.json")
@@ -187,7 +189,7 @@ def load_cluster_assignments_for_slide(slide_name: str) -> Optional[List[Dict]]:
             if slide_assignments:
                 return slide_assignments
         except Exception as e:
-            logging.error(f"Failed to load global cluster assignments: {e}")
+            log_exception(f"Failed to load global cluster assignments", e)
     
     return None
 
@@ -212,7 +214,7 @@ def classify_slide(slide_id: str) -> dict:
     clustered_cells = load_cluster_assignments_for_slide(slide_id)
     
     if clustered_cells:
-        logging.info(f"Using cluster assignments for slide {slide_id}: {len(clustered_cells)} cells")
+        log_and_print(f"Using cluster assignments for slide {slide_id}: {len(clustered_cells)} cells")
         
         # Group by cluster and select top N per cluster
         cluster_map = defaultdict(list)
@@ -226,7 +228,7 @@ def classify_slide(slide_id: str) -> dict:
             top_n = sorted_entries[:_args.classify_per_cluster]
             selected_for_classification.extend(top_n)
         
-        logging.info(f"Selected {len(selected_for_classification)} cells for multimodal-LLM classification")
+        log_and_print(f"Selected {len(selected_for_classification)} cells for multimodal-LLM classification")
         
         # Group selected by tile for efficient processing
         bboxes_by_tile = defaultdict(list)
@@ -241,7 +243,7 @@ def classify_slide(slide_id: str) -> dict:
         
         for tile_path, entries_in_tile in bboxes_by_tile.items():
             if not os.path.exists(tile_path):
-                logging.warning(f"Tile image not found: {tile_path}")
+                log_and_print(f"Tile image not found: {tile_path}", level="warning")
                 for entry in entries_in_tile:
                     multimodal_llm_predictions[(entry["bbox_file"], entry["label_id"])] = "Error - Tile Not Found"
                 continue
@@ -258,7 +260,7 @@ def classify_slide(slide_id: str) -> dict:
                     multimodal_llm_predictions[cell_id] = pred_class
                     
             except Exception as e:
-                logging.error(f"Error processing tile {tile_path}: {e}")
+                log_exception(f"Error processing tile {tile_path} (classification batch)", e)
                 for entry in entries_in_tile:
                     cell_id = (entry["bbox_file"], entry["label_id"])
                     if cell_id not in multimodal_llm_predictions:
@@ -296,12 +298,12 @@ def classify_slide(slide_id: str) -> dict:
         
     else:
         # No cluster assignments - classify all bboxes from flat structure
-        logging.info(f"No cluster assignments found for {slide_id}. Classifying all bboxes.")
+        log_and_print(f"No cluster assignments found for {slide_id}. Classifying all bboxes.")
         
         # Get bbox files for this slide from the mapping
         bbox_files = _slide_to_bbox_files.get(slide_id, [])
         if not bbox_files:
-            logging.warning(f"No bbox files found for slide {slide_id}")
+            log_and_print(f"No bbox files found for slide {slide_id}", level="warning")
             return {
                 "slide_id": slide_id,
                 "num_cells_total": 0,
@@ -324,7 +326,7 @@ def classify_slide(slide_id: str) -> dict:
                 with open(bbox_file, "r") as f:
                     bboxes_in_file = json.load(f)
             except Exception as e:
-                logging.error(f"Failed to read bbox file {bbox_file}: {e}")
+                log_exception(f"Failed to read bbox file {bbox_file}", e)
                 continue
             
             if not bboxes_in_file:
@@ -355,7 +357,7 @@ def classify_slide(slide_id: str) -> dict:
                     })
                     
             except Exception as e:
-                logging.error(f"Error processing tile {tile_path}: {e}")
+                log_exception(f"Error processing tile {tile_path} (no-cluster classification)", e)
         
         # Close cached images
         for img in tile_img_cache.values():
@@ -394,7 +396,7 @@ def classify_slide(slide_id: str) -> dict:
     with open(out_file, "w") as f:
         json.dump(final_output_data, f, indent=2)
     
-    logging.info(f"Classification for {slide_id}: {len(all_cell_results)} cells total, {num_classified} classified by multimodal-LLM")
+    log_and_print(f"Classification for {slide_id}: {len(all_cell_results)} cells total, {num_classified} classified by multimodal-LLM")
     
     return {
         "slide_id": slide_id,
@@ -428,11 +430,11 @@ def run(mini_batch: List[str]) -> List[str]:
         # Extract slide_id from trigger filename
         slide_id = trigger_path.name
         
-        logging.info(f"Processing slide from trigger: {slide_id}")
+        log_and_print(f"Processing slide from trigger: {slide_id}")
         
         # Verify slide exists in our mapping (built during init)
         if slide_id not in _slide_to_bbox_files:
-            logging.warning(f"Slide ID '{slide_id}' not in pre-built mapping, skipping")
+            log_and_print(f"Slide ID '{slide_id}' not in pre-built mapping, skipping", level="warning")
             results.append(f"SKIP:{slide_id}:not_in_mapping")
             continue
         
@@ -444,11 +446,11 @@ def run(mini_batch: List[str]) -> List[str]:
             else:
                 result = f"OK:{slide_id}:total={result_info['num_cells_total']},classified={result_info['num_cells_classified']}"
             
-            logging.info(f"Finished classifying {slide_id}")
+            log_and_print(f"Finished classifying {slide_id}")
             results.append(result)
             
         except Exception as e:
-            logging.error(f"Error classifying {slide_id}: {e}")
+            log_exception(f"Error classifying {slide_id}", e)
             results.append(f"ERROR:{slide_id}:{str(e)}")
     
     return results
@@ -458,4 +460,36 @@ def shutdown():
     """Cleanup after all mini-batches processed."""
     global _client
     _client = None
-    logging.info("Parallel classification shutdown complete")
+    log_and_print("Parallel classification shutdown complete")
+
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) entry point
+# --------------------------------------------------------------------------- #
+def run_all() -> None:
+    """
+    Process ALL slides sequentially.
+    Used when running as a command() job (max_nodes=1) for easier debugging.
+    Slide IDs are discovered from the segmentation output subfolders.
+    """
+    init()
+    slide_ids = sorted(_slide_to_bbox_files.keys())
+    log_and_print(f"[Sequential] Found {len(slide_ids)} slides to classify")
+
+    all_results = []
+    for slide_id in slide_ids:
+        log_and_print(f"[Sequential] Classifying slide: {slide_id}")
+        # Create a fake trigger file path (run() only uses the filename)
+        fake_trigger = os.path.join(_args.segmented_path, slide_id)
+        results = run([fake_trigger])
+        all_results.extend(results)
+        for r in results:
+            log_and_print(f"  -> {r}")
+
+    log_and_print(f"[Sequential] Classification complete. {len(all_results)} slides processed.")
+    shutdown()
+
+
+if __name__ == "__main__":
+    # All args are parsed by init() via parse_known_args
+    run_all()

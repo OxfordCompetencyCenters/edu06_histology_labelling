@@ -562,6 +562,377 @@ def build_components(
     
     return components
 
+
+# --------------------------------------------------------------------------- #
+# Sequential (single-node) component factory – uses command() instead of
+# parallel_run_function() so logs are simple and easy to debug.
+# --------------------------------------------------------------------------- #
+def build_sequential_components(
+    *,
+    env: Environment,
+    data_prep_output_uri: str,
+    data_prep_manifest_uri: str,
+    tile_filter_output_uri: str,
+    tile_filter_manifest_uri: str,
+    segment_output_uri: str,
+    cluster_output_uri: str,
+    classify_output_uri: str,
+    postprocess_output_uri: str,
+    annotation_output_uri: str,
+    cluster_tiles_output_uri: str,
+    filtered_annotation_output_uri: str,
+    prepped_tiles_uri: str,
+    classify_per_cluster: int,
+    param_string: str,
+    magnifications: str,
+    num_tiles: int | None,
+    filter_tiles: bool,
+    filter_min_edge_density: float,
+    filter_max_bright_ratio: float,
+    filter_max_dark_ratio: float,
+    filter_min_std_intensity: float,
+    filter_min_laplacian_var: float,
+    filter_min_color_variance: float,
+    segment_pretrained_model: str,
+    segment_flow_threshold: float,
+    segment_cellprob_threshold: float,
+    segment_use_gpu: bool,
+    segment_diameter: float | None,
+    segment_resample: bool,
+    segment_normalize: bool,
+    segmentation_tile_batch_size: int,
+    cluster_eps: float | None,
+    cluster_min_samples: int,
+    cluster_use_gpu: bool,
+    cluster_normalize: bool,
+    cluster_use_umap: bool,
+    cluster_umap_components: int,
+    cluster_umap_neighbors: int,
+    cluster_umap_min_dist: float,
+    cluster_umap_metric: str,
+    cluster_per_slide: bool,
+    cluster_slide_folders: list | None,
+    enable_annotations: bool,
+    annotation_max_labels: int,
+    annotation_random_labels: bool,
+    annotation_draw_bbox: bool,
+    annotation_draw_polygon: bool,
+    annotation_no_text: bool,
+    annotation_text_use_pred_class: bool,
+    annotation_text_use_cluster_id: bool,
+    annotation_text_use_cluster_confidence: bool,
+    annotation_text_scale: float,
+    annotation_color_by: str,
+    annotation_filter_unclassified: bool,
+    enable_cluster_tiles: bool,
+    cluster_analyzer_confidence_threshold: float,
+    cluster_analyzer_max_items: int,
+    enable_filtered_annotations: bool,
+    filtered_annotation_max_labels: int,
+    filtered_annotation_random_labels: bool,
+    filtered_annotation_draw_bbox: bool,
+    filtered_annotation_draw_polygon: bool,
+    filtered_annotation_no_text: bool,
+    filtered_annotation_text_use_pred_class: bool,
+    filtered_annotation_text_use_cluster_id: bool,
+    filtered_annotation_text_use_cluster_confidence: bool,
+    filtered_annotation_text_scale: float,
+    filtered_annotation_color_by: str,
+    filtered_annotation_filter_unclassified: bool,
+    # Parallelization parameters (unused but kept for signature compat)
+    max_nodes: int = 1,
+    processes_per_node: int = 1,
+    mini_batch_error_threshold: int = 5,
+    mini_batch_size: str = "1",
+    max_retries: int = 3,
+    retry_timeout: int = 300,
+    use_separate_clustering_cluster: bool = False,
+    clustering_use_gpu: bool = True,
+):
+    """Build command() components for sequential (single-node) execution.
+    """
+    logging.info("Building SEQUENTIAL (command) components for single-node debugging …")
+
+    # ==================== DATA PREP ====================
+    dp_cmd = (
+        "python parallel_data_prep.py "
+        "--input_data_path ${{inputs.input_data}} "
+        "--output_path ${{outputs.output_path}} "
+        "--manifest_path ${{outputs.manifest_path}} "
+        "--tile_size 512 "
+        f"--magnifications \"{magnifications}\" "
+        f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
+        "--replace_percent_in_names"
+    )
+    data_prep_component = command(
+        name="DataPrep_Seq",
+        display_name="Data Preparation - Tiling (Sequential)",
+        inputs={"input_data": Input(type=AssetTypes.URI_FOLDER)},
+        outputs={
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri),
+            "manifest_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_manifest_uri),
+        },
+        code="./",
+        command=dp_cmd.strip(),
+        environment=env,
+    )
+
+    # ==================== TILE FILTER ====================
+    tile_filter_component = None
+    if filter_tiles:
+        tf_cmd = (
+            "python parallel_tile_filter.py "
+            "--output_path ${{outputs.output_path}} "
+            "--input_path ${{inputs.input_path}} "
+            "--output_manifest_path ${{outputs.output_manifest}} "
+            f"--min_edge_density {filter_min_edge_density} "
+            f"--max_bright_ratio {filter_max_bright_ratio} "
+            f"--max_dark_ratio {filter_max_dark_ratio} "
+            f"--min_std_intensity {filter_min_std_intensity} "
+            f"--min_laplacian_var {filter_min_laplacian_var} "
+            f"--min_color_variance {filter_min_color_variance} "
+            "--save_stats"
+        )
+        tile_filter_component = command(
+            name="TileFilter_Seq",
+            display_name="Tile Quality Filtering (Sequential)",
+            inputs={
+                "input_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={
+                "output_path": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_output_uri),
+                "output_manifest": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_manifest_uri),
+            },
+            code="./",
+            command=tf_cmd.strip(),
+            environment=env,
+        )
+
+    # ==================== SEGMENTATION ====================
+    seg_cmd = (
+        "python parallel_segment.py "
+        "--output_path ${{outputs.output_path}} "
+        "--input_path ${{inputs.prepped_tiles_path}} "
+        "--output_manifest ${{outputs.output_manifest}} "
+        f"--pretrained_model {segment_pretrained_model} "
+        f"--flow_threshold {segment_flow_threshold} "
+        f"--cellprob_threshold {segment_cellprob_threshold} "
+        f"{'--segment_use_gpu ' if segment_use_gpu else ''}"
+        f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
+        f"{'--resample ' if segment_resample else ''}"
+        f"{'--normalize ' if segment_normalize else '--no_normalize '}"
+        f"--tile_batch_size {segmentation_tile_batch_size}"
+    )
+    segment_component = command(
+        name="Segmentation_Seq",
+        display_name="Cell Segmentation (Sequential)",
+        inputs={
+            "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+        },
+        outputs={
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=segment_output_uri),
+            "output_manifest": Output(type=AssetTypes.URI_FOLDER),
+        },
+        code="./",
+        command=seg_cmd.strip(),
+        environment=env,
+    )
+
+    # ==================== CLUSTERING ====================
+    clu_cmd = (
+        "python parallel_cluster.py "
+        "--segmentation_path ${{inputs.segmentation_path}} "
+        "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
+        "--output_path ${{outputs.cluster_output}} "
+        "--output_manifest ${{outputs.output_manifest}} "
+        f"{'--gpu ' if cluster_use_gpu else ''}"
+        f"{'--normalize_embeddings ' if cluster_normalize else ''}"
+        f"--min_samples {cluster_min_samples} "
+        f"{'--eps ' + str(cluster_eps) + ' ' if cluster_eps is not None else ''}"
+        + (f"--use_umap "
+           f"--umap_n_components {cluster_umap_components} "
+           f"--umap_n_neighbors {cluster_umap_neighbors} "
+           f"--umap_min_dist {cluster_umap_min_dist} "
+           f"--umap_metric {cluster_umap_metric} " if cluster_use_umap else "")
+    )
+    cluster_component = command(
+        name="Clustering_Seq",
+        display_name="DBSCAN Clustering (Sequential)",
+        inputs={
+            "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
+            "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+        },
+        outputs={
+            "cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri),
+            "output_manifest": Output(type=AssetTypes.URI_FOLDER),
+        },
+        code="./",
+        command=clu_cmd.strip(),
+        environment=env,
+    )
+
+    # ==================== CLASSIFICATION ====================
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    classify_env = {"OPENAI_API_KEY": openai_api_key} if openai_api_key else {}
+
+    cls_cmd = (
+        "python parallel_classify.py "
+        "--segmented_path ${{inputs.segmented_path}} "
+        "--prepped_tiles_path ${{inputs.prepped_tiles_path}} "
+        "--clustered_cells_path ${{inputs.cluster_path}} "
+        "--output_path ${{outputs.output_path}} "
+        f"--num_classes 4 "
+        f"--classify_per_cluster {classify_per_cluster}"
+    )
+    classify_component = command(
+        name="Classification_Seq",
+        display_name="LLM Classification (Sequential)",
+        inputs={
+            "segmented_path": Input(type=AssetTypes.URI_FOLDER),
+            "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            "cluster_path": Input(type=AssetTypes.URI_FOLDER),
+        },
+        outputs={
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri),
+        },
+        code="./",
+        command=cls_cmd.strip(),
+        environment=env,
+        environment_variables=classify_env,
+    )
+
+    # ==================== POST-PROCESS ====================
+    post_cmd = (
+        "python post_process.py "
+        "--segmentation_path ${{inputs.segmentation_path}} "
+        "--classification_path ${{inputs.classification_path}} "
+        "--output_path ${{outputs.output_path}} "
+        f"--param_string {param_string}"
+    )
+    post_process_component = command(
+        name="PostProcess_Seq",
+        display_name="Post-processing (Sequential)",
+        inputs={
+            "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
+            "classification_path": Input(type=AssetTypes.URI_FOLDER),
+        },
+        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},
+        code="./",
+        command=post_cmd,
+        environment=env,
+    )
+
+    # ==================== ANNOTATION ====================
+    annotation_component = None
+    if enable_annotations:
+        use_text = annotation_text_use_pred_class or annotation_text_use_cluster_id or annotation_text_use_cluster_confidence
+        annotation_cmd = (
+            "python annotate_images.py "
+            "--json_dir ${{inputs.annotations_json}} "
+            "--images_dir ${{inputs.prepped_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--max_labels {annotation_max_labels} "
+            f"{'--random_labels ' if annotation_random_labels else ''}"
+            f"{'--draw_bbox ' if annotation_draw_bbox else ''}"
+            f"{'--draw_polygon ' if annotation_draw_polygon else ''}"
+            f"{'--no_text ' if annotation_no_text and not use_text else ''}"
+            f"{'--text_use_pred_class ' if annotation_text_use_pred_class else ''}"
+            f"{'--text_use_cluster_id ' if annotation_text_use_cluster_id else ''}"
+            f"{'--text_use_cluster_confidence ' if annotation_text_use_cluster_confidence else ''}"
+            f"--text_scale {annotation_text_scale} "
+            f"--color_by {annotation_color_by} "
+            f"{'--filter_unclassified ' if annotation_filter_unclassified else ''}"
+        )
+        annotation_component = command(
+            name="Annotation_Seq",
+            display_name="Image Annotation (Sequential)",
+            inputs={
+                "annotations_json": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=annotation_output_uri)},
+            code="./",
+            command=annotation_cmd.strip(),
+            environment=env,
+        )
+
+    # ==================== CLUSTER TILES ====================
+    cluster_tiles_component = None
+    if enable_cluster_tiles:
+        cluster_tiles_cmd = (
+            "python cluster_analyzer.py "
+            "--json_dir ${{inputs.annotations_json}} "
+            "--tiles_dir ${{inputs.prepped_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--confidence_threshold {cluster_analyzer_confidence_threshold} "
+            f"{'--max_items ' + str(cluster_analyzer_max_items) + ' ' if cluster_analyzer_max_items is not None else ''}"
+        )
+        cluster_tiles_component = command(
+            name="ClusterTileExtraction_Seq",
+            display_name="Extract Representative Tiles (Sequential)",
+            inputs={
+                "annotations_json": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=cluster_tiles_output_uri)},
+            code="./",
+            command=cluster_tiles_cmd.strip(),
+            environment=env,
+        )
+
+    # ==================== FILTERED ANNOTATION ====================
+    filtered_annotation_component = None
+    if enable_filtered_annotations and enable_cluster_tiles:
+        filtered_use_text = filtered_annotation_text_use_pred_class or filtered_annotation_text_use_cluster_id or filtered_annotation_text_use_cluster_confidence
+        filtered_annotation_cmd = (
+            "python annotate_images.py "
+            "--json_dir ${{inputs.cluster_tiles_path}} "
+            "--images_dir ${{inputs.prepped_tiles_path}} "
+            "--output_dir ${{outputs.output_path}} "
+            f"--max_labels {filtered_annotation_max_labels} "
+            f"{'--random_labels ' if filtered_annotation_random_labels else ''}"
+            f"{'--draw_bbox ' if filtered_annotation_draw_bbox else ''}"
+            f"{'--draw_polygon ' if filtered_annotation_draw_polygon else ''}"
+            f"{'--no_text ' if filtered_annotation_no_text and not filtered_use_text else ''}"
+            f"{'--text_use_pred_class ' if filtered_annotation_text_use_pred_class else ''}"
+            f"{'--text_use_cluster_id ' if filtered_annotation_text_use_cluster_id else ''}"
+            f"{'--text_use_cluster_confidence ' if filtered_annotation_text_use_cluster_confidence else ''}"
+            f"--text_scale {filtered_annotation_text_scale} "
+            f"--color_by {filtered_annotation_color_by} "
+            f"{'--filter_unclassified ' if filtered_annotation_filter_unclassified else ''}"
+        )
+        filtered_annotation_component = command(
+            name="FilteredAnnotation_Seq",
+            display_name="Filtered Cluster Tile Annotation (Sequential)",
+            inputs={
+                "cluster_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+                "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
+            },
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=filtered_annotation_output_uri)},
+            code="./",
+            command=filtered_annotation_cmd.strip(),
+            environment=env,
+        )
+
+    components = {
+        "data_prep"   : data_prep_component,
+        "segment"     : segment_component,
+        "cluster"     : cluster_component,
+        "classify"    : classify_component,
+        "post_process": post_process_component,
+    }
+
+    if tile_filter_component:
+        components["tile_filter"] = tile_filter_component
+    if annotation_component:
+        components["annotation"] = annotation_component
+    if cluster_tiles_component:
+        components["cluster_tiles"] = cluster_tiles_component
+    if filtered_annotation_component:
+        components["filtered_annotation"] = filtered_annotation_component
+
+    return components
+
 # --------------------------------------------------------------------------- #
 # Main driver
 # --------------------------------------------------------------------------- #
@@ -699,7 +1070,10 @@ def run_pipeline():
     # ============ PARALLELIZATION CONTROL ============
     # Global parallelization settings
     p.add_argument("--max_nodes", type=int, default=1,
-                   help="Maximum number of nodes for parallel stages (default: 1 = single node)")
+                   help="Maximum number of nodes for parallel stages. "
+                        "When set to 1 (default), uses sequential command()-based jobs "
+                        "with simple linear logs for easy debugging. "
+                        "Set >1 to use parallel_run_function for multi-node execution.")
     p.add_argument("--processes_per_node", type=int, default=1,
                    help="Number of processes per node (set >1 for multi-GPU nodes)")
     p.add_argument("--mini_batch_size", type=str, default="1",
@@ -721,6 +1095,19 @@ def run_pipeline():
     validate_environment(args)
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
+    
+    # Suppress verbose Azure SDK logging
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+    logging.getLogger("azure.identity").setLevel(logging.WARNING)
+
+    # Suppress "pathOnCompute is not a known attribute" warning from azure.ai.ml REST models.
+    # This is emitted via logging (not warnings.warn), so we filter the specific logger.
+    class _PathOnComputeFilter(logging.Filter):
+        def filter(self, record):
+            return "pathOnCompute is not a known attribute" not in record.getMessage()
+    logging.getLogger("azure.ai.ml._restclient").addFilter(_PathOnComputeFilter())
+    logging.getLogger("azure.ai.ml").addFilter(_PathOnComputeFilter())
+    
     logging.info("Args: %s", vars(args))
     # ------------- Paths & names ------------- #
     timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -756,7 +1143,12 @@ def run_pipeline():
     )
     ml_client.environments.create_or_update(env)
     # ------------- Build components ------------- #
-    components = build_components(
+    use_sequential = (args.max_nodes <= 1)
+    if use_sequential:
+        logging.info("max_nodes=1 → using SEQUENTIAL (command-based) pipeline for easier debugging")
+    
+    component_builder = build_sequential_components if use_sequential else build_components
+    components = component_builder(
         env=env,
         data_prep_output_uri=dp_uri,
         data_prep_manifest_uri=dp_manifest,
@@ -861,7 +1253,7 @@ def run_pipeline():
         logging.info(f"Using separate clustering cluster: {clustering_cluster_target}")
         logging.info(f"Clustering GPU enabled: {effective_cluster_use_gpu}")
     
-    @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline")
+    @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline (parallel)")
     def full_pipeline(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
         
@@ -921,13 +1313,86 @@ def run_pipeline():
         
         return outputs
 
-    @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only")
+    # ---- Sequential (command-based) full pipeline ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline (sequential / single-node)")
+    def full_pipeline_sequential(raw_slides_input):
+        prep = components["data_prep"](input_data=raw_slides_input)
+
+        if args.filter_tiles and "tile_filter" in components:
+            tile_filter = components["tile_filter"](
+                input_path=prep.outputs.output_path,
+            )
+            tiles_for_segmentation = tile_filter.outputs.output_path
+            tiles_for_clustering = tiles_for_segmentation
+        else:
+            tiles_for_segmentation = prep.outputs.output_path
+            tiles_for_clustering = prep.outputs.output_path
+
+        seg = components["segment"](
+            prepped_tiles_path=tiles_for_segmentation,
+        )
+
+        clu = components["cluster"](
+            segmentation_path=seg.outputs.output_path,
+            prepped_tiles_path=tiles_for_clustering,
+        )
+
+        if args.use_separate_clustering_cluster:
+            clu.compute = clustering_cluster_target
+
+        cls = components["classify"](
+            segmented_path=seg.outputs.output_path,
+            prepped_tiles_path=tiles_for_clustering,
+            cluster_path=clu.outputs.cluster_output,
+        )
+
+        post = components["post_process"](
+            segmentation_path=seg.outputs.output_path,
+            classification_path=cls.outputs.output_path,
+        )
+
+        outputs = {"final_output": post.outputs.output_path}
+
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=tiles_for_clustering,
+            )
+            outputs["annotations"] = annotate.outputs.output_path
+
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=tiles_for_clustering,
+            )
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](
+                    cluster_tiles_path=cluster_tiles.outputs.output_path,
+                    prepped_tiles_path=tiles_for_clustering,
+                )
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+
+        return outputs
+
+    @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only (parallel)")
     def data_prep_pipeline(slides_in):
         prep = components["data_prep"](input_data=slides_in)
         if args.filter_tiles and "tile_filter" in components:
             filtered = components["tile_filter"](
                 trigger_path=prep.outputs.manifest_path,
                 input_path=prep.outputs.output_path
+            )
+            return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
+        return {"prepped": prep.outputs.output_path, "manifest": prep.outputs.manifest_path}
+
+    @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only (sequential)")
+    def data_prep_pipeline_sequential(slides_in):
+        prep = components["data_prep"](input_data=slides_in)
+        if args.filter_tiles and "tile_filter" in components:
+            filtered = components["tile_filter"](
+                input_path=prep.outputs.output_path,
             )
             return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
         return {"prepped": prep.outputs.output_path, "manifest": prep.outputs.manifest_path}
@@ -971,12 +1436,16 @@ def run_pipeline():
 
     # ------------- Pick + submit ------------- #
     mode = args.mode
-    logging.info("Submitting mode: %s", mode)
-    exp_name = f"v1_{mode}_{param_string}_{timestamp}"
+    logging.info("Submitting mode: %s  (sequential=%s)", mode, use_sequential)
+    seq_tag = "seq_" if use_sequential else ""
+    exp_name = f"v1_{seq_tag}{mode}_{param_string}_{timestamp}"
 
     job = None
     if mode == "prep_only":
-        job = data_prep_pipeline(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+        if use_sequential:
+            job = data_prep_pipeline_sequential(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+        else:
+            job = data_prep_pipeline(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
     elif mode in ("seg_cluster_cls", "cluster_cls", "classify_only"):
         logging.error(f"Mode '{mode}' has been removed. These resume modes required trigger/manifest files ")
         logging.error("that were only generated by the old non-parallel scripts.")
@@ -1010,7 +1479,10 @@ def run_pipeline():
             prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
         )
     else:  # full
-        job = full_pipeline(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+        if use_sequential:
+            job = full_pipeline_sequential(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+        else:
+            job = full_pipeline(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
 
     submitted = ml_client.jobs.create_or_update(job, experiment_name=exp_name)
     logging.info("Job submitted: %s", submitted.studio_url)
