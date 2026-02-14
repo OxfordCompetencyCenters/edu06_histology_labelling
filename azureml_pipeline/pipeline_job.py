@@ -669,8 +669,8 @@ def build_sequential_components(
         display_name="Data Preparation - Tiling (Sequential)",
         inputs={"input_data": Input(type=AssetTypes.URI_FOLDER)},
         outputs={
-            "output_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri),
-            "manifest_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_manifest_uri),
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_output_uri, mode="rw_mount"),
+            "manifest_path": Output(type=AssetTypes.URI_FOLDER, path=data_prep_manifest_uri, mode="rw_mount"),
         },
         code="./",
         command=dp_cmd.strip(),
@@ -700,8 +700,8 @@ def build_sequential_components(
                 "input_path": Input(type=AssetTypes.URI_FOLDER),
             },
             outputs={
-                "output_path": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_output_uri),
-                "output_manifest": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_manifest_uri),
+                "output_path": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_output_uri, mode="rw_mount"),
+                "output_manifest": Output(type=AssetTypes.URI_FOLDER, path=tile_filter_manifest_uri, mode="rw_mount"),
             },
             code="./",
             command=tf_cmd.strip(),
@@ -730,8 +730,8 @@ def build_sequential_components(
             "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
         },
         outputs={
-            "output_path": Output(type=AssetTypes.URI_FOLDER, path=segment_output_uri),
-            "output_manifest": Output(type=AssetTypes.URI_FOLDER),
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=segment_output_uri, mode="rw_mount"),
+            "output_manifest": Output(type=AssetTypes.URI_FOLDER, mode="rw_mount"),
         },
         code="./",
         command=seg_cmd.strip(),
@@ -763,8 +763,8 @@ def build_sequential_components(
             "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
         },
         outputs={
-            "cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri),
-            "output_manifest": Output(type=AssetTypes.URI_FOLDER),
+            "cluster_output": Output(type=AssetTypes.URI_FOLDER, path=cluster_output_uri, mode="rw_mount"),
+            "output_manifest": Output(type=AssetTypes.URI_FOLDER, mode="rw_mount"),
         },
         code="./",
         command=clu_cmd.strip(),
@@ -793,7 +793,7 @@ def build_sequential_components(
             "cluster_path": Input(type=AssetTypes.URI_FOLDER),
         },
         outputs={
-            "output_path": Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri),
+            "output_path": Output(type=AssetTypes.URI_FOLDER, path=classify_output_uri, mode="rw_mount"),
         },
         code="./",
         command=cls_cmd.strip(),
@@ -816,7 +816,7 @@ def build_sequential_components(
             "segmentation_path": Input(type=AssetTypes.URI_FOLDER),
             "classification_path": Input(type=AssetTypes.URI_FOLDER),
         },
-        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri)},
+        outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=postprocess_output_uri, mode="rw_mount")},
         code="./",
         command=post_cmd,
         environment=env,
@@ -850,7 +850,7 @@ def build_sequential_components(
                 "annotations_json": Input(type=AssetTypes.URI_FOLDER),
                 "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
             },
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=annotation_output_uri)},
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=annotation_output_uri, mode="rw_mount")},
             code="./",
             command=annotation_cmd.strip(),
             environment=env,
@@ -874,7 +874,7 @@ def build_sequential_components(
                 "annotations_json": Input(type=AssetTypes.URI_FOLDER),
                 "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
             },
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=cluster_tiles_output_uri)},
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=cluster_tiles_output_uri, mode="rw_mount")},
             code="./",
             command=cluster_tiles_cmd.strip(),
             environment=env,
@@ -908,7 +908,7 @@ def build_sequential_components(
                 "cluster_tiles_path": Input(type=AssetTypes.URI_FOLDER),
                 "prepped_tiles_path": Input(type=AssetTypes.URI_FOLDER),
             },
-            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=filtered_annotation_output_uri)},
+            outputs={"output_path": Output(type=AssetTypes.URI_FOLDER, path=filtered_annotation_output_uri, mode="rw_mount")},
             code="./",
             command=filtered_annotation_cmd.strip(),
             environment=env,
@@ -940,12 +940,15 @@ def run_pipeline():
     # ---------------- CLI ---------------- #
     p = argparse.ArgumentParser("Launch Azure ML histology pipeline")
     p.add_argument("--mode", choices=[
-        "prep_only", "full", "seg_cluster_cls", "cluster_cls", "classify_only", "annotate_only", "extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"
+        "prep_only", "full", "from_segmentation", "annotate_only", "extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"
     ], default="full")
 
     # Input URIs
     p.add_argument("--raw_slides_uri", default="azureml://datastores/workspaceblobstore/paths/your_slides/")
     p.add_argument("--prepped_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/")
+    p.add_argument("--prepped_manifest_uri", default=None,
+                   help="URI to manifest/trigger folder for prepped tiles (needed for parallel from_segmentation mode). "
+                        "Usually {base_uri}/manifest_dp/ or {base_uri}/manifest_tf/ from a previous run.")
     p.add_argument("--segmented_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/")
     p.add_argument("--clustered_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/")
     p.add_argument("--postprocess_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_postprocess_data/")
@@ -1067,6 +1070,12 @@ def run_pipeline():
     p.add_argument("--filtered_annotation_filter_unclassified", action="store_true", default=True,
                    help="Filter out unclassified cells for filtered annotations")
 
+    # ============ RESUME / CHECKPOINT CONTROL ============
+    p.add_argument("--base_uri", type=str, default=None,
+                   help="Resume a preempted run by reusing the same blob storage base URI. "
+                        "Copy the 'base_uri' value printed by the previous run and pass it here. "
+                        "When omitted a new timestamped path is generated automatically.")
+
     # ============ PARALLELIZATION CONTROL ============
     # Global parallelization settings
     p.add_argument("--max_nodes", type=int, default=1,
@@ -1112,7 +1121,17 @@ def run_pipeline():
     # ------------- Paths & names ------------- #
     timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     param_string  = build_param_string(args)
-    base_uri      = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v4_{param_string}"
+    if args.base_uri:
+        base_uri = args.base_uri.rstrip("/")
+        logging.info("RESUMING with existing base_uri: %s", base_uri)
+    else:
+        base_uri = f"azureml://datastores/workspaceblobstore/paths/{timestamp}_v4_{param_string}"
+    # Print prominently so the user can copy-paste for --base_uri on resume
+    logging.info("========================================")
+    logging.info("base_uri = %s", base_uri)
+    logging.info("To resume after preemption, re-run with:")
+    logging.info("  --base_uri \"%s\"", base_uri)
+    logging.info("========================================")
     dp_uri        = f"{base_uri}/data_prep/"
     dp_manifest   = f"{base_uri}/manifest_dp/"
     filter_uri    = f"{base_uri}/tile_filter/" if args.filter_tiles else None
@@ -1414,6 +1433,93 @@ def run_pipeline():
         else:
             return {"message": "Representative tile extraction not enabled"}
 
+    # ---- From-segmentation pipeline (parallel) ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="Run from segmentation onwards (parallel)")
+    def from_segmentation_pipeline(prepped_in, manifest_in):
+        seg = components["segment"](
+            trigger_path=manifest_in,
+            prepped_tiles_path=prepped_in
+        )
+        clu = components["cluster"](
+            trigger_path=seg.outputs.output_manifest,
+            segmentation_path=seg.outputs.output_path,
+            prepped_tiles_path=prepped_in
+        )
+        if args.use_separate_clustering_cluster:
+            clu.compute = clustering_cluster_target
+        cls = components["classify"](
+            trigger_path=clu.outputs.output_manifest,
+            segmented_path=seg.outputs.output_path,
+            prepped_tiles_path=prepped_in,
+            cluster_path=clu.outputs.cluster_output
+        )
+        post = components["post_process"](
+            segmentation_path=seg.outputs.output_path,
+            classification_path=cls.outputs.output_path
+        )
+        outputs = {"final_output": post.outputs.output_path}
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=prepped_in
+            )
+            outputs["annotations"] = annotate.outputs.output_path
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=prepped_in
+            )
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](
+                    cluster_tiles_path=cluster_tiles.outputs.output_path,
+                    prepped_tiles_path=prepped_in
+                )
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        return outputs
+
+    # ---- From-segmentation pipeline (sequential) ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="Run from segmentation onwards (sequential)")
+    def from_segmentation_pipeline_sequential(prepped_in):
+        seg = components["segment"](
+            prepped_tiles_path=prepped_in
+        )
+        clu = components["cluster"](
+            segmentation_path=seg.outputs.output_path,
+            prepped_tiles_path=prepped_in
+        )
+        if args.use_separate_clustering_cluster:
+            clu.compute = clustering_cluster_target
+        cls = components["classify"](
+            segmented_path=seg.outputs.output_path,
+            prepped_tiles_path=prepped_in,
+            cluster_path=clu.outputs.cluster_output
+        )
+        post = components["post_process"](
+            segmentation_path=seg.outputs.output_path,
+            classification_path=cls.outputs.output_path
+        )
+        outputs = {"final_output": post.outputs.output_path}
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=prepped_in
+            )
+            outputs["annotations"] = annotate.outputs.output_path
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            cluster_tiles = components["cluster_tiles"](
+                annotations_json=post.outputs.output_path,
+                prepped_tiles_path=prepped_in
+            )
+            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                filtered_annotate = components["filtered_annotation"](
+                    cluster_tiles_path=cluster_tiles.outputs.output_path,
+                    prepped_tiles_path=prepped_in
+                )
+                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        return outputs
+
     @pipeline(compute=COMPUTE_CLUSTER, description="Extract representative tiles and create filtered annotations")
     def cluster_tiles_and_filtered_annotations_pipeline(postprocess_in, prepped_in):
         outputs = {}
@@ -1446,11 +1552,20 @@ def run_pipeline():
             job = data_prep_pipeline_sequential(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
         else:
             job = data_prep_pipeline(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
-    elif mode in ("seg_cluster_cls", "cluster_cls", "classify_only"):
-        logging.error(f"Mode '{mode}' has been removed. These resume modes required trigger/manifest files ")
-        logging.error("that were only generated by the old non-parallel scripts.")
-        logging.error("Please use --mode full instead, or re-run the full pipeline from the beginning.")
-        return
+    elif mode == "from_segmentation":
+        if use_sequential:
+            job = from_segmentation_pipeline_sequential(
+                prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
+            )
+        else:
+            if not args.prepped_manifest_uri:
+                logging.error("Parallel from_segmentation mode requires --prepped_manifest_uri "
+                              "(e.g. {base_uri}/manifest_dp/ or {base_uri}/manifest_tf/ from a previous run)")
+                return
+            job = from_segmentation_pipeline(
+                prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
+                manifest_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_manifest_uri),
+            )
     elif mode == "annotate_only":
         if not args.enable_annotations:
             logging.error("annotate_only mode requires --enable_annotations flag")
@@ -1500,7 +1615,7 @@ def validate_environment(args: argparse.Namespace):
     if not WORKSPACE_NAME:
         missing.append("AZURE_ML_WORKSPACE_NAME")
 
-    mode_requires_openai = args.mode in {"full", "seg_cluster_cls", "cluster_cls", "classify_only"}
+    mode_requires_openai = args.mode in {"full", "from_segmentation"}
     if mode_requires_openai and not os.getenv("OPENAI_API_KEY"):
         missing.append("OPENAI_API_KEY")
     

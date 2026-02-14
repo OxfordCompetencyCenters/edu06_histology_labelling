@@ -66,11 +66,10 @@ When exploring a clustered slide, **every cell is color-coded by its cluster**. 
 |------|-------------|
 | `full` | Complete pipeline: prep → filter → segment → cluster → classify → post-process |
 | `prep_only` | Data preparation and optional tile filtering only |
+| `from_segmentation` | Run from segmentation onwards using existing prepped tiles |
 | `annotate_only` | Generate image annotations from existing results |
 | `extract_cluster_tiles_only` | Extract representative tiles from existing results |
 | `cluster_tiles_and_filtered_annotations` | Extract tiles and create filtered annotations |
-
-> **Note**: Previous resume modes (`seg_cluster_cls`, `cluster_cls`, `classify_only`) have been removed as they required trigger/manifest files from older non-parallel scripts. Use `--mode full` for new runs.
 
 ---
 
@@ -173,6 +172,24 @@ python azureml_pipeline/pipeline_job.py --mode annotate_only \
     --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_tiles/"
 ```
 
+### Run from Segmentation Onwards (Using Existing Tiles)
+```bash
+python azureml_pipeline/pipeline_job.py --mode from_segmentation \
+    --segment_use_gpu \
+    --cluster_use_gpu \
+    --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_previous_run/data_prep/"
+```
+
+For parallel mode, also provide the manifest URI:
+```bash
+python azureml_pipeline/pipeline_job.py --mode from_segmentation \
+    --max_nodes 4 \
+    --segment_use_gpu \
+    --cluster_use_gpu \
+    --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_previous_run/tile_filter/" \
+    --prepped_manifest_uri "azureml://datastores/workspaceblobstore/paths/your_previous_run/manifest_tf/"
+```
+
 ### Extract Representative Cluster Tiles
 ```bash
 python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
@@ -190,9 +207,10 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--raw_slides_uri` | `"azureml://..."` | URI to raw WSI slides (for `full` and `prep_only` modes) |
-| `--prepped_data_uri` | `"azureml://..."` | URI to prepped tiles (for `seg_cluster_cls`, `cluster_cls`, `classify_only`, `annotate_only`, etc.) |
-| `--segmented_data_uri` | `"azureml://..."` | URI to segmented data (for `cluster_cls` and `classify_only` modes) |
-| `--clustered_data_uri` | `"azureml://..."` | URI to clustered data (for `classify_only` mode) |
+| `--prepped_data_uri` | `"azureml://..."` | URI to prepped tiles (for `from_segmentation`, `annotate_only`, etc.) |
+| `--prepped_manifest_uri` | `None` | URI to manifest/trigger folder (needed for parallel `from_segmentation` mode) |
+| `--segmented_data_uri` | `"azureml://..."` | URI to segmented data |
+| `--clustered_data_uri` | `"azureml://..."` | URI to clustered data |
 | `--postprocess_data_uri` | `"azureml://..."` | URI to post-processed results (for `annotate_only`, `extract_cluster_tiles_only`, etc.) |
 
 ### Data Preparation

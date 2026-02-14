@@ -49,7 +49,7 @@ import umap
 from cuml.cluster import DBSCAN as GPUDbscan
 from kneed import KneeLocator
 
-from utils import build_slide_to_bbox_files_mapping, log_and_print, log_exception
+from utils import build_slide_to_bbox_files_mapping, log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
 
 
 # Global state initialized in init()
@@ -424,10 +424,9 @@ def cluster_slide(slide_id: str) -> dict:
             "confidence": confidence
         })
     
-    # Save results
+    # Save results (with fsync for preemption safety on FUSE mounts)
     out_json_path = slide_output_path / "cluster_assignments.json"
-    with open(out_json_path, "w") as f:
-        json.dump(cluster_assignments, f, indent=2)
+    write_json_atomic(out_json_path, cluster_assignments)
     
     unique_labels = set(labels)
     n_clusters = len(unique_labels - {-1})
@@ -469,6 +468,15 @@ def run(mini_batch: List[str]) -> List[str]:
         
         log_and_print(f"Processing slide from trigger: {slide_id}")
         
+        # Skip slides already completed (checkpoint resume across preempted jobs)
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"Skipping (already done): {slide_id}")
+            results.append(f"SKIP:{slide_id}:already_done")
+            # Still create trigger file so downstream steps can see it
+            out_trigger = _manifest_base / slide_id
+            out_trigger.touch()
+            continue
+        
         # Verify slide exists in our mapping (built during init)
         if slide_id not in _slide_to_files:
             log_and_print(f"Slide ID '{slide_id}' not in pre-built mapping, skipping", level="warning")
@@ -482,6 +490,7 @@ def run(mini_batch: List[str]) -> List[str]:
                 result = f"WARN:{slide_id}:{result_info['error']}"
             else:
                 result = f"OK:{slide_id}:clusters={result_info['num_clusters']},embeddings={result_info['num_embeddings']}"
+                mark_slide_done(_output_base, slide_id, result)
                 
                 # Create trigger file for downstream steps (classify)
                 out_trigger = _manifest_base / slide_id
@@ -518,8 +527,15 @@ def run_all() -> None:
     slide_ids = sorted(_slide_to_files.keys())
     log_and_print(f"[Sequential] Found {len(slide_ids)} slides to cluster")
 
+    # --- checkpoint resume ---
+    already_done = sum(1 for sid in slide_ids if is_slide_done(_output_base, sid))
+    log_checkpoint_status("Clustering", len(slide_ids), already_done)
+
     all_results = []
     for slide_id in slide_ids:
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"[Sequential] Skipping (already done): {slide_id}")
+            continue
         log_and_print(f"[Sequential] Clustering slide: {slide_id}")
         # Create a fake trigger file path (run() only uses the filename)
         fake_trigger = os.path.join(_args.segmentation_path, slide_id)
@@ -527,6 +543,8 @@ def run_all() -> None:
         all_results.extend(results)
         for r in results:
             log_and_print(f"  -> {r}")
+            if r.startswith("OK:"):
+                mark_slide_done(_output_base, slide_id, r)
 
     log_and_print(f"[Sequential] Clustering complete. {len(all_results)} slides processed.")
     shutdown()

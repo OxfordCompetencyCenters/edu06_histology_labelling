@@ -3,11 +3,13 @@ Shared utility functions for Azure ML parallel processing scripts.
 """
 from __future__ import annotations
 import glob
+import json
 import logging
 import os
 import sys
 import traceback
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional
 
 
@@ -105,3 +107,71 @@ def get_tile_path_from_bbox_file(bbox_file: str, prepped_tiles_path: str) -> tup
     except Exception as e:
         logging.error(f"Error parsing info from bbox_file '{bbox_file}': {e}")
         return None, None, None
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoint helpers for sequential (single-node) jobs
+# --------------------------------------------------------------------------- #
+# When running on low-priority / spot VMs, the node can be preempted at any
+# time.  These helpers let each stage's run_all() skip slides whose output
+# already exists, so progress made before a preemption is preserved.
+# --------------------------------------------------------------------------- #
+
+_CHECKPOINT_FILENAME = "_checkpoint_done.json"
+
+
+def _fsync_file(filepath: Path) -> None:
+    """Force-flush a file to the underlying storage (critical for FUSE/blobfuse mounts).
+
+    On Azure ML ``rw_mount`` outputs the filesystem is backed by blobfuse.
+    Without an explicit ``fsync`` the data may sit in the kernel page-cache
+    and be lost if the VM is preempted before the OS flushes it.
+    """
+    try:
+        fd = os.open(str(filepath), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        # Best-effort: if the file disappeared or the FS doesn't support
+        # fsync (rare), we still want the caller to continue.
+        pass
+
+
+def write_json_atomic(filepath: Path, data, indent: int = 2) -> None:
+    """Write JSON to *filepath* with fsync to guarantee durability on FUSE mounts.
+
+    This should be used for ALL important output files (results, checkpoints)
+    so that data is persisted to blob storage even under sudden preemption.
+    """
+    with open(filepath, "w") as f:
+        json.dump(data, f, indent=indent)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def mark_slide_done(output_dir: Path, slide_id: str, result: str) -> None:
+    """Write a small JSON checkpoint file indicating a slide was fully processed."""
+    slide_out = output_dir / slide_id
+    slide_out.mkdir(parents=True, exist_ok=True)
+    ckpt = slide_out / _CHECKPOINT_FILENAME
+    write_json_atomic(ckpt, {"slide_id": slide_id, "result": result})
+
+
+def is_slide_done(output_dir: Path, slide_id: str) -> bool:
+    """Return True if the checkpoint file for *slide_id* already exists."""
+    return (output_dir / slide_id / _CHECKPOINT_FILENAME).exists()
+
+
+def log_checkpoint_status(
+    stage_name: str, total: int, already_done: int
+) -> None:
+    """Log a summary of how many items will be skipped due to checkpoints."""
+    if already_done:
+        log_and_print(
+            f"[{stage_name}] Resuming: {already_done}/{total} slides already "
+            f"completed — {total - already_done} remaining"
+        )
+    else:
+        log_and_print(f"[{stage_name}] Starting fresh: {total} slides to process")

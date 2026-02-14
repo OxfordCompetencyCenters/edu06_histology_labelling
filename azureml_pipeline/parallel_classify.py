@@ -40,7 +40,7 @@ from typing import Dict, List, Optional
 from PIL import Image
 from openai import OpenAI
 
-from utils import build_slide_to_bbox_files_mapping, get_tile_path_from_bbox_file, log_and_print, log_exception
+from utils import build_slide_to_bbox_files_mapping, get_tile_path_from_bbox_file, log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
 
 
 # Global state initialized in init()
@@ -391,10 +391,9 @@ def classify_slide(slide_id: str) -> dict:
     
     final_output_data = list(grouped_by_tile.values())
     
-    # Save results
+    # Save results (with fsync for preemption safety on FUSE mounts)
     out_file = slide_output_path / "classification_results.json"
-    with open(out_file, "w") as f:
-        json.dump(final_output_data, f, indent=2)
+    write_json_atomic(out_file, final_output_data)
     
     log_and_print(f"Classification for {slide_id}: {len(all_cell_results)} cells total, {num_classified} classified by multimodal-LLM")
     
@@ -432,6 +431,12 @@ def run(mini_batch: List[str]) -> List[str]:
         
         log_and_print(f"Processing slide from trigger: {slide_id}")
         
+        # Skip slides already completed (checkpoint resume across preempted jobs)
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"Skipping (already done): {slide_id}")
+            results.append(f"SKIP:{slide_id}:already_done")
+            continue
+        
         # Verify slide exists in our mapping (built during init)
         if slide_id not in _slide_to_bbox_files:
             log_and_print(f"Slide ID '{slide_id}' not in pre-built mapping, skipping", level="warning")
@@ -445,6 +450,7 @@ def run(mini_batch: List[str]) -> List[str]:
                 result = f"WARN:{slide_id}:{result_info['error']}"
             else:
                 result = f"OK:{slide_id}:total={result_info['num_cells_total']},classified={result_info['num_cells_classified']}"
+                mark_slide_done(_output_base, slide_id, result)
             
             log_and_print(f"Finished classifying {slide_id}")
             results.append(result)
@@ -476,8 +482,15 @@ def run_all() -> None:
     slide_ids = sorted(_slide_to_bbox_files.keys())
     log_and_print(f"[Sequential] Found {len(slide_ids)} slides to classify")
 
+    # --- checkpoint resume ---
+    already_done = sum(1 for sid in slide_ids if is_slide_done(_output_base, sid))
+    log_checkpoint_status("Classification", len(slide_ids), already_done)
+
     all_results = []
     for slide_id in slide_ids:
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"[Sequential] Skipping (already done): {slide_id}")
+            continue
         log_and_print(f"[Sequential] Classifying slide: {slide_id}")
         # Create a fake trigger file path (run() only uses the filename)
         fake_trigger = os.path.join(_args.segmented_path, slide_id)
@@ -485,6 +498,8 @@ def run_all() -> None:
         all_results.extend(results)
         for r in results:
             log_and_print(f"  -> {r}")
+            if r.startswith("OK:"):
+                mark_slide_done(_output_base, slide_id, r)
 
     log_and_print(f"[Sequential] Classification complete. {len(all_results)} slides processed.")
     shutdown()

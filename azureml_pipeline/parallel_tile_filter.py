@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from utils import log_and_print, log_exception
+from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
 
 
 # Global state
@@ -168,6 +168,16 @@ def run(mini_batch: List[str]) -> List[str]:
         slide_dst_dir.mkdir(parents=True, exist_ok=True)
         
         log_and_print(f"Processing slide: {slide_id}")
+
+        # Skip slides already completed (checkpoint resume across preempted jobs)
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"Skipping (already done): {slide_id}")
+            results.append(f"SKIP:{slide_id}:already_done")
+            # Still create output trigger file so downstream steps can see it
+            if _manifest_out_base:
+                (_manifest_out_base / slide_id).touch()
+            continue
+
         if not slide_src_dir.exists():
             log_and_print(f"Slide folder not found: {slide_src_dir}", level="warning")
             results.append(f"MISSING:{slide_id}")
@@ -198,8 +208,7 @@ def run(mini_batch: List[str]) -> List[str]:
                     
                     if _args.save_stats:
                         stats_path = slide_dst_dir / f"{file_path.stem}_filter_stats.json"
-                        with open(stats_path, 'w') as f:
-                            json.dump(stats, f, indent=2)
+                        write_json_atomic(stats_path, stats)
                     kept_count += 1
                     
             except Exception as e:
@@ -212,6 +221,7 @@ def run(mini_batch: List[str]) -> List[str]:
         result = f"OK:{slide_id}:processed={processed_count}:kept={kept_count}"
         results.append(result)
         log_and_print(result)
+        mark_slide_done(_output_base, slide_id, result)
     
     return results
 
@@ -235,9 +245,16 @@ def run_all() -> None:
     slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
     log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
 
+    # --- checkpoint resume ---
+    already_done = sum(1 for d in slide_dirs if is_slide_done(_output_base, d.name))
+    log_checkpoint_status("TileFilter", len(slide_dirs), already_done)
+
     all_results = []
     for slide_dir in sorted(slide_dirs):
         slide_id = slide_dir.name
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"[Sequential] Skipping (already done): {slide_id}")
+            continue
         log_and_print(f"[Sequential] Processing slide: {slide_id}")
         # Create a fake trigger file path (run() only uses the filename)
         fake_trigger = str(_tiles_base / slide_id)
@@ -245,6 +262,8 @@ def run_all() -> None:
         all_results.extend(results)
         for r in results:
             log_and_print(f"  -> {r}")
+            if r.startswith("OK:"):
+                mark_slide_done(_output_base, slide_id, r)
 
     log_and_print(f"[Sequential] Tile filtering complete. {len(all_results)} slides processed.")
     shutdown()

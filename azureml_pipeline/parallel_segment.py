@@ -25,7 +25,7 @@ from cellpose import models
 import numpy as np
 from PIL import Image
 
-from utils import log_and_print, log_exception
+from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
 
 # Global state initialized in init()
 _args = None
@@ -121,8 +121,7 @@ def save_segmentation_result(masks: np.ndarray, tile_name: str, output_dir: Path
         })
     
     bbox_path = output_dir / f"{tile_name}_bboxes.json"
-    with open(bbox_path, "w") as f:
-        json.dump(bboxes, f, indent=2)
+    write_json_atomic(bbox_path, bboxes)
     
     return {"mask_path": str(mask_path), "bbox_path": str(bbox_path), "num_cells": len(bboxes)}
 
@@ -162,6 +161,16 @@ def run(mini_batch: List[str]) -> List[str]:
         slide_dst_dir.mkdir(parents=True, exist_ok=True)
         
         log_and_print(f"Processing slide: {slide_id}")
+
+        # Skip slides already completed (checkpoint resume across preempted jobs)
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"Skipping (already done): {slide_id}")
+            results.append(f"SKIP:{slide_id}:already_done")
+            # Still create trigger file so downstream steps can see it
+            trigger_file = _manifest_base / slide_id
+            trigger_file.touch()
+            continue
+
         if not slide_src_dir.exists():
             log_and_print(f"Slide folder not found: {slide_src_dir}", level="warning")
             results.append(f"MISSING:{slide_id}")
@@ -195,6 +204,7 @@ def run(mini_batch: List[str]) -> List[str]:
         result = f"OK:{slide_id}:total_cells={count}"
         results.append(result)
         log_and_print(result)
+        mark_slide_done(_output_base, slide_id, result)
         
         # Create trigger file for downstream stages (cluster, classify)
         trigger_file = _manifest_base / slide_id
@@ -225,9 +235,16 @@ def run_all() -> None:
     slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
     log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
 
+    # --- checkpoint resume ---
+    already_done = sum(1 for d in slide_dirs if is_slide_done(_output_base, d.name))
+    log_checkpoint_status("Segmentation", len(slide_dirs), already_done)
+
     all_results = []
     for slide_dir in sorted(slide_dirs):
         slide_id = slide_dir.name
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"[Sequential] Skipping (already done): {slide_id}")
+            continue
         log_and_print(f"[Sequential] Processing slide: {slide_id}")
         # Create a fake trigger file path (run() only uses the filename)
         fake_trigger = str(_tiles_base / slide_id)
@@ -235,6 +252,8 @@ def run_all() -> None:
         all_results.extend(results)
         for r in results:
             log_and_print(f"  -> {r}")
+            if r.startswith("OK:"):
+                mark_slide_done(_output_base, slide_id, r)
 
     log_and_print(f"[Sequential] Segmentation complete. {len(all_results)} slides processed.")
     shutdown()

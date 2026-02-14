@@ -30,7 +30,7 @@ from typing import Generator, List, Tuple
 import openslide
 from PIL import Image
 
-from utils import log_and_print, log_exception
+from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, _fsync_file
 
 
 # Global state initialized in init()
@@ -247,9 +247,17 @@ def run(mini_batch: List[str]) -> List[str]:
             continue
         try:
             path_obj = Path(file_path)
+            # Check if this slide was already processed (checkpoint resume)
+            slide_id_check = generate_slide_id(path_obj.stem, _args.replace_percent_in_names)
+            if is_slide_done(_output_base, slide_id_check):
+                log_and_print(f"Skipping (already done): {path_obj.name}")
+                results.append(f"SKIP:{file_path}:already_done")
+                continue
+
             result_info = tile_slide(path_obj)
             result = f"OK:{file_path}:tiles={result_info['num_tiles']}"
             log_and_print(f"Finished {result_info['slide_name']} (ID: {result_info['slide_id']}): {result_info['num_tiles']} tiles")
+            mark_slide_done(_output_base, result_info['slide_id'], result)
             results.append(result)
             
         except Exception as e:
@@ -278,13 +286,26 @@ def run_all(input_data_path: str) -> None:
                  if f.is_file() and f.suffix.lower() in ('.ndpi',)]
     log_and_print(f"[Sequential] Found {len(wsi_files)} WSI files in {input_dir}")
 
+    # --- checkpoint resume ---
+    already_done = sum(
+        1 for wsi in wsi_files
+        if is_slide_done(_output_base, generate_slide_id(wsi.stem, _args.replace_percent_in_names))
+    )
+    log_checkpoint_status("DataPrep", len(wsi_files), already_done)
+
     all_results = []
     for wsi in sorted(wsi_files):
+        slide_id = generate_slide_id(wsi.stem, _args.replace_percent_in_names)
+        if is_slide_done(_output_base, slide_id):
+            log_and_print(f"[Sequential] Skipping (already done): {wsi.name}")
+            continue
         log_and_print(f"[Sequential] Processing: {wsi.name}")
         results = run([str(wsi)])
         all_results.extend(results)
         for r in results:
             log_and_print(f"  -> {r}")
+            if r.startswith("OK:"):
+                mark_slide_done(_output_base, slide_id, r)
 
     log_and_print(f"[Sequential] Data prep complete. {len(all_results)} slides processed.")
     shutdown()
