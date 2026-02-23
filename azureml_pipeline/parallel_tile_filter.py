@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
+from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic, build_slide_filter_set, should_process_slide
 
 
 # Global state
@@ -39,13 +39,14 @@ _args = None
 _output_base = None
 _tiles_base = None
 _manifest_out_base = None
+_slide_filter = None
 
 
 def init():
     """
     Initialize resources.
     """
-    global _args, _output_base, _tiles_base, _manifest_out_base
+    global _args, _output_base, _tiles_base, _manifest_out_base, _slide_filter
     
     logging.basicConfig(
         level=logging.INFO,
@@ -68,6 +69,8 @@ def init():
     parser.add_argument("--min_laplacian_var", type=float, default=50.0)
     parser.add_argument("--min_color_variance", type=float, default=5.0)
     parser.add_argument("--save_stats", action="store_true", default=True)
+    parser.add_argument("--slide_filter", type=str, default=None,
+                        help="Comma-separated list of slide names to process (others are skipped)")
     
     _args, _ = parser.parse_known_args()
     _output_base = Path(_args.output_path)
@@ -79,10 +82,14 @@ def init():
         _manifest_out_base = Path(_args.output_manifest_path)
         _manifest_out_base.mkdir(parents=True, exist_ok=True)
     
+    _slide_filter = build_slide_filter_set(_args.slide_filter)
+    
     log_and_print("Parallel tile filter (Slide-Level) initialized")
     log_and_print(f"  Input Source: {_tiles_base}")
     log_and_print(f"  Output Path: {_output_base}")
     log_and_print(f"  Manifest Output: {_manifest_out_base}")
+    if _slide_filter:
+        log_and_print(f"  Slide filter: {_slide_filter}")
 
 
 def calculate_tile_stats(image: np.ndarray) -> dict:
@@ -159,6 +166,12 @@ def run(mini_batch: List[str]) -> List[str]:
     for trigger_file in mini_batch:
         trigger_path = Path(trigger_file)
         slide_id = trigger_path.name  # The file name is the slide ID
+        
+        # Apply slide filter
+        if not should_process_slide(slide_id, _slide_filter):
+            log_and_print(f"Skipping (slide filter): {slide_id}")
+            results.append(f"SKIP:{slide_id}:filtered")
+            continue
         
         # Source directory for this slide (from side input)
         slide_src_dir = _tiles_base / slide_id
@@ -243,6 +256,13 @@ def run_all() -> None:
     init()
     # Find all slide subdirectories in the tiles input folder
     slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
+    
+    # Apply slide filter
+    if _slide_filter:
+        before = len(slide_dirs)
+        slide_dirs = [d for d in slide_dirs if should_process_slide(d.name, _slide_filter)]
+        log_and_print(f"[Sequential] Slide filter matched {len(slide_dirs)}/{before} slide folders")
+    
     log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
 
     # --- checkpoint resume ---

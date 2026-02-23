@@ -5,6 +5,7 @@ import os
 import glob
 from collections import defaultdict
 from pathlib import Path
+from utils import build_slide_filter_set, should_process_slide
 
 def find_annotation_files(json_path):
     """
@@ -239,6 +240,12 @@ def main():
         default=None,
         help="Maximum number of representative cells per cluster.\nDefault is to include all cells that meet the confidence threshold."
     )
+    parser.add_argument(
+        "--slide_filter",
+        type=str,
+        default=None,
+        help="Comma-separated list of slide names to process (others are skipped)"
+    )
 
     args = parser.parse_args()
 
@@ -264,6 +271,14 @@ def main():
         return
 
     print("Analyzing clusters and filtering data per slide...")
+    
+    # Apply slide filter
+    slide_filter = build_slide_filter_set(args.slide_filter)
+    if slide_filter:
+        before = len(annotation_files)
+        annotation_files = {k: v for k, v in annotation_files.items()
+                            if should_process_slide(k, slide_filter)}
+        print(f"Slide filter matched {len(annotation_files)}/{before} slides")
     
     total_slides_processed = 0
     for slide_name, json_path in annotation_files.items():

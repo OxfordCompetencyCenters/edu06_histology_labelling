@@ -49,7 +49,7 @@ import umap
 from cuml.cluster import DBSCAN as GPUDbscan
 from kneed import KneeLocator
 
-from utils import build_slide_to_bbox_files_mapping, log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
+from utils import build_slide_to_bbox_files_mapping, log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic, build_slide_filter_set, should_process_slide
 
 
 # Global state initialized in init()
@@ -60,6 +60,7 @@ _model = None
 _transform = None
 _device = None
 _slide_to_files = None  # Cache: slide_id -> list of bbox files
+_slide_filter = None
 
 
 def init():
@@ -67,7 +68,7 @@ def init():
     Initialize model and resources before processing mini-batches.
     Called once per worker process.
     """
-    global _args, _output_base, _manifest_base, _model, _transform, _device, _slide_to_files
+    global _args, _output_base, _manifest_base, _model, _transform, _device, _slide_to_files, _slide_filter
     
     logging.basicConfig(
         level=logging.INFO,
@@ -114,6 +115,8 @@ def init():
                         help="Percentile fallback if elbow not found")
     parser.add_argument("--dbscan_metric", type=str, default="euclidean",
                         help="Metric for DBSCAN ('euclidean', 'cosine')")
+    parser.add_argument("--slide_filter", type=str, default=None,
+                        help="Comma-separated list of slide names to process (others are skipped)")
     
     _args, _ = parser.parse_known_args()
     _output_base = Path(_args.output_path)
@@ -142,6 +145,8 @@ def init():
     # Build slide-to-files mapping from flat structure
     _slide_to_files = build_slide_to_bbox_files_mapping(_args.segmentation_path)
     
+    _slide_filter = build_slide_filter_set(_args.slide_filter)
+    
     log_and_print("Parallel clustering initialized")
     log_and_print(f"  Segmentation path: {_args.segmentation_path}")
     log_and_print(f"  Prepped tiles path: {_args.prepped_tiles_path}")
@@ -149,6 +154,8 @@ def init():
     log_and_print(f"  Device: {_device}")
     log_and_print(f"  UMAP enabled: {_args.use_umap}")
     log_and_print(f"  Discovered {len(_slide_to_files)} unique slide IDs")
+    if _slide_filter:
+        log_and_print(f"  Slide filter: {_slide_filter}")
 
 
 def extract_patch_embedding(
@@ -468,6 +475,12 @@ def run(mini_batch: List[str]) -> List[str]:
         
         log_and_print(f"Processing slide from trigger: {slide_id}")
         
+        # Apply slide filter
+        if not should_process_slide(slide_id, _slide_filter):
+            log_and_print(f"Skipping (slide filter): {slide_id}")
+            results.append(f"SKIP:{slide_id}:filtered")
+            continue
+        
         # Skip slides already completed (checkpoint resume across preempted jobs)
         if is_slide_done(_output_base, slide_id):
             log_and_print(f"Skipping (already done): {slide_id}")
@@ -525,6 +538,13 @@ def run_all() -> None:
     """
     init()
     slide_ids = sorted(_slide_to_files.keys())
+    
+    # Apply slide filter
+    if _slide_filter:
+        before = len(slide_ids)
+        slide_ids = [sid for sid in slide_ids if should_process_slide(sid, _slide_filter)]
+        log_and_print(f"[Sequential] Slide filter matched {len(slide_ids)}/{before} slides")
+    
     log_and_print(f"[Sequential] Found {len(slide_ids)} slides to cluster")
 
     # --- checkpoint resume ---

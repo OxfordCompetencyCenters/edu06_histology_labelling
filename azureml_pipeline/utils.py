@@ -3,6 +3,7 @@ Shared utility functions for Azure ML parallel processing scripts.
 """
 from __future__ import annotations
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ import sys
 import traceback
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 
 # --------------------------------------------------------------------------- #
@@ -175,3 +176,66 @@ def log_checkpoint_status(
         )
     else:
         log_and_print(f"[{stage_name}] Starting fresh: {total} slides to process")
+
+
+# --------------------------------------------------------------------------- #
+# Slide filter helpers
+# --------------------------------------------------------------------------- #
+# The --slide_filter argument is a comma-separated list of slide names provided
+# by the user.  Slide names may contain spaces but not commas.
+#
+# Because the pipeline uses generated "slide IDs" (sanitised versions of the
+# original name), matching is performed against both the raw slide name and
+# the generated slide ID.  This way users can specify either the original
+# filename stem or the processed ID.
+# --------------------------------------------------------------------------- #
+
+def generate_slide_id(slide_name: str, replace_percent: bool = True) -> str:
+    """Generate a short, filesystem-safe ID from a slide name.
+
+    This is the canonical implementation used by all pipeline stages.
+    """
+    if replace_percent:
+        slide_name = slide_name.replace('%', '_pct_')
+    clean_name = "".join(c for c in slide_name if c.isalnum() or c in " -_")
+    short_name = clean_name[:20].strip()
+    hash_suffix = hashlib.md5(slide_name.encode()).hexdigest()[:8]
+    return f"{short_name}_{hash_suffix}".replace(" ", "_")
+
+
+def parse_slide_filter(filter_str: Optional[str]) -> Optional[Set[str]]:
+    """Parse a comma-separated slide filter string into a set of names.
+
+    Returns ``None`` when no filter is active (process everything).
+    Each entry is stripped of leading/trailing whitespace.
+    """
+    if not filter_str:
+        return None
+    names = {name.strip() for name in filter_str.split(",") if name.strip()}
+    if not names:
+        return None
+    return names
+
+
+def build_slide_filter_set(filter_str: Optional[str]) -> Optional[Set[str]]:
+    """Build an expanded filter set that includes both raw names AND their
+    generated slide IDs so downstream stages can match on either.
+
+    Returns ``None`` when no filter is active.
+    """
+    raw_names = parse_slide_filter(filter_str)
+    if raw_names is None:
+        return None
+    expanded: Set[str] = set()
+    for name in raw_names:
+        expanded.add(name)
+        expanded.add(generate_slide_id(name, replace_percent=True))
+        expanded.add(generate_slide_id(name, replace_percent=False))
+    return expanded
+
+
+def should_process_slide(slide_id: str, slide_filter: Optional[Set[str]]) -> bool:
+    """Return True if *slide_id* passes the filter (or no filter is active)."""
+    if slide_filter is None:
+        return True
+    return slide_id in slide_filter

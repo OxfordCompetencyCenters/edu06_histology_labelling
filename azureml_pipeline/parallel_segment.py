@@ -25,7 +25,7 @@ from cellpose import models
 import numpy as np
 from PIL import Image
 
-from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic
+from utils import log_and_print, log_exception, mark_slide_done, is_slide_done, log_checkpoint_status, write_json_atomic, build_slide_filter_set, should_process_slide
 
 # Global state initialized in init()
 _args = None
@@ -33,6 +33,7 @@ _model = None
 _output_base = None
 _tiles_base = None
 _manifest_base = None
+_slide_filter = None
 
 
 def extract_slide_id_from_filename(filename: str) -> Optional[str]:
@@ -46,7 +47,7 @@ def init():
     """
     Initialize model before processing mini-batches.
     """
-    global _args, _model, _output_base, _tiles_base, _manifest_base
+    global _args, _model, _output_base, _tiles_base, _manifest_base, _slide_filter
     
     logging.basicConfig(
         level=logging.INFO,
@@ -72,6 +73,8 @@ def init():
     parser.add_argument("--normalize", action="store_true", default=True)
     parser.add_argument("--no_normalize", action="store_true")
     parser.add_argument("--tile_batch_size", type=int, default=1)
+    parser.add_argument("--slide_filter", type=str, default=None,
+                        help="Comma-separated list of slide names to process (others are skipped)")
     
     _args, _ = parser.parse_known_args()
     _output_base = Path(_args.output_path)
@@ -81,6 +84,8 @@ def init():
     
     _manifest_base = Path(_args.output_manifest)
     _manifest_base.mkdir(parents=True, exist_ok=True)
+    
+    _slide_filter = build_slide_filter_set(_args.slide_filter)
     
     log_and_print(f"Loading Cellpose model: {_args.pretrained_model}")
     log_and_print(f"  GPU: {_args.segment_use_gpu}")
@@ -97,6 +102,8 @@ def init():
     log_and_print("Parallel segmentation (Slide-Level) initialized")
     log_and_print(f"  Input Source: {_tiles_base}")
     log_and_print(f"  Output path: {_output_base}")
+    if _slide_filter:
+        log_and_print(f"  Slide filter: {_slide_filter}")
 
 
 def save_segmentation_result(masks: np.ndarray, tile_name: str, output_dir: Path) -> dict:
@@ -155,6 +162,12 @@ def run(mini_batch: List[str]) -> List[str]:
     for trigger_file in mini_batch:
         trigger_path = Path(trigger_file)
         slide_id = trigger_path.name
+        
+        # Apply slide filter
+        if not should_process_slide(slide_id, _slide_filter):
+            log_and_print(f"Skipping (slide filter): {slide_id}")
+            results.append(f"SKIP:{slide_id}:filtered")
+            continue
         
         slide_src_dir = _tiles_base / slide_id
         slide_dst_dir = _output_base / slide_id
@@ -233,6 +246,13 @@ def run_all() -> None:
     init()
     # Find all slide subdirectories in the tiles input folder
     slide_dirs = [d for d in _tiles_base.iterdir() if d.is_dir()]
+    
+    # Apply slide filter
+    if _slide_filter:
+        before = len(slide_dirs)
+        slide_dirs = [d for d in slide_dirs if should_process_slide(d.name, _slide_filter)]
+        log_and_print(f"[Sequential] Slide filter matched {len(slide_dirs)}/{before} slide folders")
+    
     log_and_print(f"[Sequential] Found {len(slide_dirs)} slide folders in {_tiles_base}")
 
     # --- checkpoint resume ---

@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import hashlib
 import glob
+from utils import build_slide_filter_set, should_process_slide
 
 _color_cache = {}
 
@@ -365,6 +366,9 @@ def main():
     parser.add_argument("--filter_unclassified", action="store_true", default=True,
                         help="Filter out cells with pred_class='Unclassified' IF --text_use_pred_class or --color_by=pred_class is set.")
 
+    parser.add_argument("--slide_filter", type=str, default=None,
+                        help="Comma-separated list of slide names to process (others are skipped)")
+
 
     args = parser.parse_args()
 
@@ -389,6 +393,14 @@ def main():
     
     if not (args.draw_bbox or args.draw_polygon):
          print("Warning: Neither --draw_bbox nor --draw_polygon specified. No shapes will be drawn.")
+
+    # Apply slide filter
+    slide_filter = build_slide_filter_set(args.slide_filter)
+    if slide_filter:
+        before = len(annotation_files)
+        annotation_files = {k: v for k, v in annotation_files.items()
+                            if should_process_slide(k, slide_filter)}
+        print(f"Slide filter matched {len(annotation_files)}/{before} slides")
 
     text_flags_specified = args.text_use_pred_class or args.text_use_cluster_id or args.text_use_cluster_confidence
     

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from skimage import measure
+from utils import build_slide_filter_set, should_process_slide
 
 # ─────────────────────────── helpers ─────────────────────────── #
 
@@ -132,6 +133,8 @@ def main():
     ap.add_argument("--classification_path", required=True)
     ap.add_argument("--output_path", required=True)
     ap.add_argument("--param_string", default="")
+    ap.add_argument("--slide_filter", type=str, default=None,
+                    help="Comma-separated list of slide names to process (others are skipped)")
     args = ap.parse_args()
 
     seg_root = Path(args.segmentation_path)
@@ -143,6 +146,14 @@ def main():
     if not classification_files:
         logging.error("No classification_results.json files found under %s", cls_root)
         return
+
+    # Apply slide filter
+    slide_filter = build_slide_filter_set(args.slide_filter)
+    if slide_filter:
+        before = len(classification_files)
+        classification_files = {k: v for k, v in classification_files.items()
+                                if should_process_slide(k, slide_filter)}
+        logging.info("Slide filter matched %d/%d slides", len(classification_files), before)
 
     logging.info("Found classification files for slides: %s", list(classification_files.keys()))
     

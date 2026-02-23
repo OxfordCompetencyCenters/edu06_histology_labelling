@@ -1,6 +1,6 @@
 from __future__ import annotations
 import argparse, logging, os, sys, warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Suppress Azure ML SDK internal deprecation warning for pathOnCompute
@@ -44,11 +44,11 @@ def format_param_for_name(value):
 
 def build_param_string(args):
     """Compact signature of key hyper-params for folder/exp names."""
-    mode = getattr(args, 'mode', 'full')
+    start_from = getattr(args, 'start_from', 'data_prep')
     parts = []
     
     # For cluster tiles and filtered annotations only modes
-    if mode in ["extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"]:
+    if start_from in ["cluster_tiles"]:
         if hasattr(args, 'enable_cluster_tiles') and args.enable_cluster_tiles:
             # reptiles = representative tiles
             parts.append(f"reptiles_{format_param_for_name(args.cluster_analyzer_confidence_threshold)}")
@@ -71,7 +71,7 @@ def build_param_string(args):
         return "_".join(parts) if parts else "default"
     
     # For annotation only mode
-    elif mode == "annotate_only":
+    elif start_from == "annotate":
         if hasattr(args, 'enable_annotations') and args.enable_annotations:
             parts.append("annotated")
             parts.append(f"maxlabels_{args.annotation_max_labels}")
@@ -216,6 +216,7 @@ def build_components(
     retry_timeout: int = 300,
     use_separate_clustering_cluster: bool = False,
     clustering_use_gpu: bool = True,
+    slide_filter: str | None = None,
 ):
     """Create the Azure ML parallel/command components used in the pipeline.
     
@@ -224,10 +225,15 @@ def build_components(
     """
     logging.info("Building component objects …")
     logging.info(f"Parallelization settings: max_nodes={max_nodes}, processes_per_node={processes_per_node}")
+    if slide_filter:
+        logging.info(f"  Slide filter: {slide_filter}")
     
     if use_separate_clustering_cluster:
         logging.info(f"  Clustering cluster: {COMPUTE_CLUSTER_CLUSTERING}")
         logging.info(f"  Clustering GPU: {clustering_use_gpu}")
+
+    # Build reusable slide_filter argument snippet for program_arguments
+    _sf_arg = f'--slide_filter "{slide_filter}" ' if slide_filter else ''
 
     # ==================== DATA PREP ====================
     logging.info("Building data_prep component")
@@ -258,6 +264,7 @@ def build_components(
                 f"--tile_size 512 "
                 f"--magnifications \"{magnifications}\" "
                 f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
+                f"{_sf_arg}"
                 "--replace_percent_in_names"
             ),
         ),
@@ -299,6 +306,7 @@ def build_components(
                         f"--min_std_intensity {filter_min_std_intensity} "
                         f"--min_laplacian_var {filter_min_laplacian_var} "
                         f"--min_color_variance {filter_min_color_variance} "
+                        f"{_sf_arg}"
                         "--save_stats"
                     ),
                 ),
@@ -339,6 +347,7 @@ def build_components(
                     f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
                     f"{'--resample ' if segment_resample else ''}"
                     f"{'--normalize ' if segment_normalize else '--no_normalize '}"
+                    f"{_sf_arg}"
                     f"--tile_batch_size {segmentation_tile_batch_size}"
                 ),
             ),
@@ -378,6 +387,7 @@ def build_components(
                     f"{'--normalize_embeddings ' if cluster_normalize else ''}"
                     f"--min_samples {cluster_min_samples} "
                     f"{'--eps ' + str(cluster_eps) + ' ' if cluster_eps is not None else ''}"
+                    f"{_sf_arg}"
                     + (f"--use_umap "
                        f"--umap_n_components {cluster_umap_components} "
                        f"--umap_n_neighbors {cluster_umap_neighbors} "
@@ -423,6 +433,7 @@ def build_components(
                 f"--clustered_cells_path ${{{{inputs.cluster_path}}}} "
                 f"--output_path ${{{{outputs.output_path}}}} "
                 f"--num_classes 4 "
+                f"{_sf_arg}"
                 f"--classify_per_cluster {classify_per_cluster}"
             ),
         ),
@@ -434,8 +445,9 @@ def build_components(
         "--segmentation_path ${{inputs.segmentation_path}} "
         "--classification_path ${{inputs.classification_path}} "
         "--output_path ${{outputs.output_path}} "
-        f"--param_string {param_string}"
-    )
+        f"--param_string {param_string} "
+        f"{_sf_arg}"
+    ).rstrip()
     post_process_component = command(
         name="PostProcess",
         display_name="Post-processing",
@@ -469,6 +481,7 @@ def build_components(
             f"--text_scale {annotation_text_scale} "
             f"--color_by {annotation_color_by} "
             f"{'--filter_unclassified ' if annotation_filter_unclassified else ''}"
+            f"{_sf_arg}"
         )
         annotation_component = command(
             name="Annotation",
@@ -492,6 +505,7 @@ def build_components(
             "--output_dir ${{outputs.output_path}} "
             f"--confidence_threshold {cluster_analyzer_confidence_threshold} "
             f"{'--max_items ' + str(cluster_analyzer_max_items) + ' ' if cluster_analyzer_max_items is not None else ''}"
+            f"{_sf_arg}"
         )
         cluster_tiles_component = command(
             name="ClusterTileExtraction",
@@ -526,6 +540,7 @@ def build_components(
             f"--text_scale {filtered_annotation_text_scale} "
             f"--color_by {filtered_annotation_color_by} "
             f"{'--filter_unclassified ' if filtered_annotation_filter_unclassified else ''}"
+            f"{_sf_arg}"
         )
         filtered_annotation_component = command(
             name="FilteredAnnotation",
@@ -648,10 +663,16 @@ def build_sequential_components(
     retry_timeout: int = 300,
     use_separate_clustering_cluster: bool = False,
     clustering_use_gpu: bool = True,
+    slide_filter: str | None = None,
 ):
     """Build command() components for sequential (single-node) execution.
     """
     logging.info("Building SEQUENTIAL (command) components for single-node debugging …")
+    if slide_filter:
+        logging.info(f"  Slide filter: {slide_filter}")
+
+    # Build reusable slide_filter argument snippet for command strings
+    _sf_arg = f'--slide_filter "{slide_filter}" ' if slide_filter else ''
 
     # ==================== DATA PREP ====================
     dp_cmd = (
@@ -662,6 +683,7 @@ def build_sequential_components(
         "--tile_size 512 "
         f"--magnifications \"{magnifications}\" "
         f"{'--num_tiles ' + str(num_tiles) + ' ' if num_tiles is not None else ''}"
+        f"{_sf_arg}"
         "--replace_percent_in_names"
     )
     data_prep_component = command(
@@ -691,6 +713,7 @@ def build_sequential_components(
             f"--min_std_intensity {filter_min_std_intensity} "
             f"--min_laplacian_var {filter_min_laplacian_var} "
             f"--min_color_variance {filter_min_color_variance} "
+            f"{_sf_arg}"
             "--save_stats"
         )
         tile_filter_component = command(
@@ -721,6 +744,7 @@ def build_sequential_components(
         f"{'--diameter ' + str(segment_diameter) + ' ' if segment_diameter is not None else ''}"
         f"{'--resample ' if segment_resample else ''}"
         f"{'--normalize ' if segment_normalize else '--no_normalize '}"
+        f"{_sf_arg}"
         f"--tile_batch_size {segmentation_tile_batch_size}"
     )
     segment_component = command(
@@ -749,6 +773,7 @@ def build_sequential_components(
         f"{'--normalize_embeddings ' if cluster_normalize else ''}"
         f"--min_samples {cluster_min_samples} "
         f"{'--eps ' + str(cluster_eps) + ' ' if cluster_eps is not None else ''}"
+        f"{_sf_arg}"
         + (f"--use_umap "
            f"--umap_n_components {cluster_umap_components} "
            f"--umap_n_neighbors {cluster_umap_neighbors} "
@@ -782,6 +807,7 @@ def build_sequential_components(
         "--clustered_cells_path ${{inputs.cluster_path}} "
         "--output_path ${{outputs.output_path}} "
         f"--num_classes 4 "
+        f"{_sf_arg}"
         f"--classify_per_cluster {classify_per_cluster}"
     )
     classify_component = command(
@@ -807,8 +833,9 @@ def build_sequential_components(
         "--segmentation_path ${{inputs.segmentation_path}} "
         "--classification_path ${{inputs.classification_path}} "
         "--output_path ${{outputs.output_path}} "
-        f"--param_string {param_string}"
-    )
+        f"--param_string {param_string} "
+        f"{_sf_arg}"
+    ).rstrip()
     post_process_component = command(
         name="PostProcess_Seq",
         display_name="Post-processing (Sequential)",
@@ -842,6 +869,7 @@ def build_sequential_components(
             f"--text_scale {annotation_text_scale} "
             f"--color_by {annotation_color_by} "
             f"{'--filter_unclassified ' if annotation_filter_unclassified else ''}"
+            f"{_sf_arg}"
         )
         annotation_component = command(
             name="Annotation_Seq",
@@ -866,6 +894,7 @@ def build_sequential_components(
             "--output_dir ${{outputs.output_path}} "
             f"--confidence_threshold {cluster_analyzer_confidence_threshold} "
             f"{'--max_items ' + str(cluster_analyzer_max_items) + ' ' if cluster_analyzer_max_items is not None else ''}"
+            f"{_sf_arg}"
         )
         cluster_tiles_component = command(
             name="ClusterTileExtraction_Seq",
@@ -900,6 +929,7 @@ def build_sequential_components(
             f"--text_scale {filtered_annotation_text_scale} "
             f"--color_by {filtered_annotation_color_by} "
             f"{'--filter_unclassified ' if filtered_annotation_filter_unclassified else ''}"
+            f"{_sf_arg}"
         )
         filtered_annotation_component = command(
             name="FilteredAnnotation_Seq",
@@ -939,19 +969,53 @@ def build_sequential_components(
 def run_pipeline():
     # ---------------- CLI ---------------- #
     p = argparse.ArgumentParser("Launch Azure ML histology pipeline")
-    p.add_argument("--mode", choices=[
-        "prep_only", "full", "from_segmentation", "annotate_only", "extract_cluster_tiles_only", "cluster_tiles_and_filtered_annotations"
-    ], default="full")
 
-    # Input URIs
+    # ============ STEP SELECTION ============
+    # Pick a step and the pipeline runs from that step onward.
+    # Steps in order: data_prep → tile_filter → segment → cluster →
+    #                 classify → post_process → annotate / cluster_tiles
+    ORDERED_STEPS = [
+        "data_prep", "tile_filter", "segment", "cluster",
+        "classify", "post_process", "annotate", "cluster_tiles",
+    ]
+    p.add_argument(
+        "--start_from",
+        choices=ORDERED_STEPS,
+        default="data_prep",
+        help=(
+            "Run the pipeline starting from this step onward. "
+            "Steps in order: data_prep → tile_filter → segment → cluster → "
+            "classify → post_process → annotate → cluster_tiles. "
+            "Provide the required --*_uri args for whichever step you start from."
+        ),
+    )
+
+    # Input / output URIs — supply what the chosen start step needs.
+    # data_prep needs:  --raw_slides_uri
+    # tile_filter needs: --prepped_data_uri
+    # segment needs:     --prepped_data_uri  (+ --prepped_manifest_uri for parallel)
+    # cluster needs:     --prepped_data_uri  --segmented_data_uri  (+ --segmented_manifest_uri for parallel)
+    # classify needs:    --prepped_data_uri  --segmented_data_uri  --clustered_data_uri (+ --clustered_manifest_uri for parallel)
+    # post_process needs:--prepped_data_uri  --segmented_data_uri  --classified_data_uri
+    # annotate needs:    --prepped_data_uri  --postprocess_data_uri
+    # cluster_tiles:     --prepped_data_uri  --postprocess_data_uri
     p.add_argument("--raw_slides_uri", default="azureml://datastores/workspaceblobstore/paths/your_slides/")
-    p.add_argument("--prepped_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_prepped_data/")
+    p.add_argument("--prepped_data_uri", default=None,
+                   help="URI to prepped tiles folder (required for start_from >= tile_filter)")
     p.add_argument("--prepped_manifest_uri", default=None,
-                   help="URI to manifest/trigger folder for prepped tiles (needed for parallel from_segmentation mode). "
-                        "Usually {base_uri}/manifest_dp/ or {base_uri}/manifest_tf/ from a previous run.")
-    p.add_argument("--segmented_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_segmented_data/")
-    p.add_argument("--clustered_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_clustered_data/")
-    p.add_argument("--postprocess_data_uri", default="azureml://datastores/workspaceblobstore/paths/my_postprocess_data/")
+                   help="URI to manifest/trigger folder for prepped tiles (parallel mode, start_from=segment)")
+    p.add_argument("--segmented_data_uri", default=None,
+                   help="URI to segmentation results folder (required for start_from >= cluster)")
+    p.add_argument("--segmented_manifest_uri", default=None,
+                   help="URI to segmentation manifest/trigger folder (parallel mode, start_from=cluster)")
+    p.add_argument("--clustered_data_uri", default=None,
+                   help="URI to clustering results folder (required for start_from >= classify)")
+    p.add_argument("--clustered_manifest_uri", default=None,
+                   help="URI to clustering manifest/trigger folder (parallel mode, start_from=classify)")
+    p.add_argument("--classified_data_uri", default=None,
+                   help="URI to classification results folder (required for start_from=post_process)")
+    p.add_argument("--postprocess_data_uri", default=None,
+                   help="URI to post-process results folder (required for start_from >= annotate)")
 
     # Data-prep params
     p.add_argument("--magnifications", type=str, default="1.0",
@@ -1100,6 +1164,13 @@ def run_pipeline():
     p.add_argument("--clustering_use_gpu", action="store_true",
                    help="Use GPU for clustering on the clustering cluster (default: auto-detect from cluster name)")
 
+    # Slide subset selection
+    p.add_argument("--slide_filter", type=str, default=None,
+                   help="Comma-separated list of slide names to process (others are skipped). "
+                        "Slide names may contain spaces but not commas. "
+                        "Matching works against both original filenames and generated slide IDs. "
+                        "Example: --slide_filter \"Slide A,Slide B,Slide C\"")
+
     args = p.parse_args()
     validate_environment(args)
     logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
@@ -1119,7 +1190,7 @@ def run_pipeline():
     
     logging.info("Args: %s", vars(args))
     # ------------- Paths & names ------------- #
-    timestamp     = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp     = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     param_string  = build_param_string(args)
     if args.base_uri:
         base_uri = args.base_uri.rstrip("/")
@@ -1254,16 +1325,15 @@ def run_pipeline():
         retry_timeout=args.retry_timeout,
         use_separate_clustering_cluster=args.use_separate_clustering_cluster,
         clustering_use_gpu=args.clustering_use_gpu if args.clustering_use_gpu else args.cluster_use_gpu,
+        slide_filter=args.slide_filter,
     )
     
     # ------------- Determine clustering compute target ------------- #
-    # Auto-detect GPU usage for clustering cluster if not explicitly set
     clustering_cluster_target = COMPUTE_CLUSTER
     effective_cluster_use_gpu = args.cluster_use_gpu
     
     if args.use_separate_clustering_cluster:
         clustering_cluster_target = COMPUTE_CLUSTER_CLUSTERING
-        # Auto-detect: if cluster name contains 'cpu', disable GPU
         if not args.clustering_use_gpu and 'cpu' in COMPUTE_CLUSTER_CLUSTERING.lower():
             effective_cluster_use_gpu = False
             logging.info(f"Auto-detected CPU-only clustering cluster: {COMPUTE_CLUSTER_CLUSTERING}")
@@ -1271,333 +1341,265 @@ def run_pipeline():
             effective_cluster_use_gpu = True
         logging.info(f"Using separate clustering cluster: {clustering_cluster_target}")
         logging.info(f"Clustering GPU enabled: {effective_cluster_use_gpu}")
-    
+
+    # ================================================================ #
+    # Helper: append optional annotation/cluster-tiles tail steps
+    # to any pipeline that produces a post_process output.
+    # ================================================================ #
+    def _append_tail_steps(outputs, post_output, prepped_tiles):
+        """Wire up annotation / cluster_tiles / filtered_annotation from post_process output."""
+        if args.enable_annotations and "annotation" in components:
+            annotate = components["annotation"](
+                annotations_json=post_output,
+                prepped_tiles_path=prepped_tiles,
+            )
+            outputs["annotations"] = annotate.outputs.output_path
+
+        if args.enable_cluster_tiles and "cluster_tiles" in components:
+            ct = components["cluster_tiles"](
+                annotations_json=post_output,
+                prepped_tiles_path=prepped_tiles,
+            )
+            outputs["cluster_tiles"] = ct.outputs.output_path
+
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                fa = components["filtered_annotation"](
+                    cluster_tiles_path=ct.outputs.output_path,
+                    prepped_tiles_path=prepped_tiles,
+                )
+                outputs["filtered_annotations"] = fa.outputs.output_path
+
+    # ================================================================ #
+    # Pipeline definitions — one per start_from step, ×2 (seq/parallel)
+    # ================================================================ #
+
+    # ---- data_prep (full) ----
     @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline (parallel)")
-    def full_pipeline(raw_slides_input):
+    def pipe_data_prep(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
-        
         if args.filter_tiles and "tile_filter" in components:
-            tile_filter = components["tile_filter"](
-                trigger_path=prep.outputs.manifest_path,
-                input_path=prep.outputs.output_path
-            )
-            tiles_for_segmentation = tile_filter.outputs.output_path
-            trigger_for_segment = tile_filter.outputs.output_manifest
-            tiles_for_clustering = tiles_for_segmentation
+            tf = components["tile_filter"](trigger_path=prep.outputs.manifest_path, input_path=prep.outputs.output_path)
+            tiles = tf.outputs.output_path
+            trigger = tf.outputs.output_manifest
         else:
-            tiles_for_segmentation = prep.outputs.output_path
-            trigger_for_segment = prep.outputs.manifest_path
-            tiles_for_clustering = prep.outputs.output_path
-
-        seg = components["segment"](
-            trigger_path=trigger_for_segment,
-            prepped_tiles_path=tiles_for_segmentation
-        )
-        
-        clu = components["cluster"](
-            trigger_path=seg.outputs.output_manifest,
-            segmentation_path=seg.outputs.output_path,
-            prepped_tiles_path=tiles_for_clustering
-        )
-        
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-        
-        cls = components["classify"](
-            trigger_path=clu.outputs.output_manifest,
-            segmented_path=seg.outputs.output_path,
-            prepped_tiles_path=tiles_for_clustering,
-            cluster_path=clu.outputs.cluster_output
-        )
-        
-        post = components["post_process"](segmentation_path=seg.outputs.output_path,
-                                         classification_path=cls.outputs.output_path)
-        
+            tiles = prep.outputs.output_path
+            trigger = prep.outputs.manifest_path
+        seg = components["segment"](trigger_path=trigger, prepped_tiles_path=tiles)
+        clu = components["cluster"](trigger_path=seg.outputs.output_manifest, segmentation_path=seg.outputs.output_path, prepped_tiles_path=tiles)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](trigger_path=clu.outputs.output_manifest, segmented_path=seg.outputs.output_path, prepped_tiles_path=tiles, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=seg.outputs.output_path, classification_path=cls.outputs.output_path)
         outputs = {"final_output": post.outputs.output_path}
-        
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](annotations_json=post.outputs.output_path,
-                                              prepped_tiles_path=tiles_for_clustering)
-            outputs["annotations"] = annotate.outputs.output_path
-        
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=post.outputs.output_path,
-                                                       prepped_tiles_path=tiles_for_clustering)
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
-                                                                     prepped_tiles_path=tiles_for_clustering)
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-        
+        _append_tail_steps(outputs, post.outputs.output_path, tiles)
         return outputs
 
-    # ---- Sequential (command-based) full pipeline ----
-    @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline (sequential / single-node)")
-    def full_pipeline_sequential(raw_slides_input):
+    @pipeline(compute=COMPUTE_CLUSTER, description="Full pipeline (sequential)")
+    def pipe_data_prep_seq(raw_slides_input):
         prep = components["data_prep"](input_data=raw_slides_input)
-
         if args.filter_tiles and "tile_filter" in components:
-            tile_filter = components["tile_filter"](
-                input_path=prep.outputs.output_path,
-            )
-            tiles_for_segmentation = tile_filter.outputs.output_path
-            tiles_for_clustering = tiles_for_segmentation
+            tf = components["tile_filter"](input_path=prep.outputs.output_path)
+            tiles = tf.outputs.output_path
         else:
-            tiles_for_segmentation = prep.outputs.output_path
-            tiles_for_clustering = prep.outputs.output_path
-
-        seg = components["segment"](
-            prepped_tiles_path=tiles_for_segmentation,
-        )
-
-        clu = components["cluster"](
-            segmentation_path=seg.outputs.output_path,
-            prepped_tiles_path=tiles_for_clustering,
-        )
-
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-
-        cls = components["classify"](
-            segmented_path=seg.outputs.output_path,
-            prepped_tiles_path=tiles_for_clustering,
-            cluster_path=clu.outputs.cluster_output,
-        )
-
-        post = components["post_process"](
-            segmentation_path=seg.outputs.output_path,
-            classification_path=cls.outputs.output_path,
-        )
-
+            tiles = prep.outputs.output_path
+        seg = components["segment"](prepped_tiles_path=tiles)
+        clu = components["cluster"](segmentation_path=seg.outputs.output_path, prepped_tiles_path=tiles)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](segmented_path=seg.outputs.output_path, prepped_tiles_path=tiles, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=seg.outputs.output_path, classification_path=cls.outputs.output_path)
         outputs = {"final_output": post.outputs.output_path}
-
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering,
-            )
-            outputs["annotations"] = annotate.outputs.output_path
-
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=tiles_for_clustering,
-            )
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](
-                    cluster_tiles_path=cluster_tiles.outputs.output_path,
-                    prepped_tiles_path=tiles_for_clustering,
-                )
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-
+        _append_tail_steps(outputs, post.outputs.output_path, tiles)
         return outputs
 
-    @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only (parallel)")
-    def data_prep_pipeline(slides_in):
-        prep = components["data_prep"](input_data=slides_in)
-        if args.filter_tiles and "tile_filter" in components:
-            filtered = components["tile_filter"](
-                trigger_path=prep.outputs.manifest_path,
-                input_path=prep.outputs.output_path
-            )
-            return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
-        return {"prepped": prep.outputs.output_path, "manifest": prep.outputs.manifest_path}
-
-    @pipeline(compute=COMPUTE_CLUSTER, description="Data prep only (sequential)")
-    def data_prep_pipeline_sequential(slides_in):
-        prep = components["data_prep"](input_data=slides_in)
-        if args.filter_tiles and "tile_filter" in components:
-            filtered = components["tile_filter"](
-                input_path=prep.outputs.output_path,
-            )
-            return {"prepped": prep.outputs.output_path, "filtered": filtered.outputs.output_path}
-        return {"prepped": prep.outputs.output_path, "manifest": prep.outputs.manifest_path}
-    
-    @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing results")
-    def annotate_only_pipeline(postprocess_in, prepped_in):
-        if "annotation" in components:
-            annotate = components["annotation"](annotations_json=postprocess_in,
-                                              prepped_tiles_path=prepped_in)
-            return {"annotations": annotate.outputs.output_path}
-        else:
-            return {"message": "Annotations not enabled"}
-    @pipeline(compute=COMPUTE_CLUSTER, description="Extract representative tiles from existing results")
-    def cluster_tiles_only_pipeline(postprocess_in, prepped_in):
-        if "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=postprocess_in,
-                                                       prepped_tiles_path=prepped_in)
-            return {"cluster_tiles": cluster_tiles.outputs.output_path}
-        else:
-            return {"message": "Representative tile extraction not enabled"}
-
-    # ---- From-segmentation pipeline (parallel) ----
-    @pipeline(compute=COMPUTE_CLUSTER, description="Run from segmentation onwards (parallel)")
-    def from_segmentation_pipeline(prepped_in, manifest_in):
-        seg = components["segment"](
-            trigger_path=manifest_in,
-            prepped_tiles_path=prepped_in
-        )
-        clu = components["cluster"](
-            trigger_path=seg.outputs.output_manifest,
-            segmentation_path=seg.outputs.output_path,
-            prepped_tiles_path=prepped_in
-        )
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-        cls = components["classify"](
-            trigger_path=clu.outputs.output_manifest,
-            segmented_path=seg.outputs.output_path,
-            prepped_tiles_path=prepped_in,
-            cluster_path=clu.outputs.cluster_output
-        )
-        post = components["post_process"](
-            segmentation_path=seg.outputs.output_path,
-            classification_path=cls.outputs.output_path
-        )
+    # ---- segment ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="From segmentation onward (parallel)")
+    def pipe_segment(prepped_in, manifest_in):
+        seg = components["segment"](trigger_path=manifest_in, prepped_tiles_path=prepped_in)
+        clu = components["cluster"](trigger_path=seg.outputs.output_manifest, segmentation_path=seg.outputs.output_path, prepped_tiles_path=prepped_in)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](trigger_path=clu.outputs.output_manifest, segmented_path=seg.outputs.output_path, prepped_tiles_path=prepped_in, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=seg.outputs.output_path, classification_path=cls.outputs.output_path)
         outputs = {"final_output": post.outputs.output_path}
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=prepped_in
-            )
-            outputs["annotations"] = annotate.outputs.output_path
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=prepped_in
-            )
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](
-                    cluster_tiles_path=cluster_tiles.outputs.output_path,
-                    prepped_tiles_path=prepped_in
-                )
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
         return outputs
 
-    # ---- From-segmentation pipeline (sequential) ----
-    @pipeline(compute=COMPUTE_CLUSTER, description="Run from segmentation onwards (sequential)")
-    def from_segmentation_pipeline_sequential(prepped_in):
-        seg = components["segment"](
-            prepped_tiles_path=prepped_in
-        )
-        clu = components["cluster"](
-            segmentation_path=seg.outputs.output_path,
-            prepped_tiles_path=prepped_in
-        )
-        if args.use_separate_clustering_cluster:
-            clu.compute = clustering_cluster_target
-        cls = components["classify"](
-            segmented_path=seg.outputs.output_path,
-            prepped_tiles_path=prepped_in,
-            cluster_path=clu.outputs.cluster_output
-        )
-        post = components["post_process"](
-            segmentation_path=seg.outputs.output_path,
-            classification_path=cls.outputs.output_path
-        )
+    @pipeline(compute=COMPUTE_CLUSTER, description="From segmentation onward (sequential)")
+    def pipe_segment_seq(prepped_in):
+        seg = components["segment"](prepped_tiles_path=prepped_in)
+        clu = components["cluster"](segmentation_path=seg.outputs.output_path, prepped_tiles_path=prepped_in)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](segmented_path=seg.outputs.output_path, prepped_tiles_path=prepped_in, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=seg.outputs.output_path, classification_path=cls.outputs.output_path)
         outputs = {"final_output": post.outputs.output_path}
-        if args.enable_annotations and "annotation" in components:
-            annotate = components["annotation"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=prepped_in
-            )
-            outputs["annotations"] = annotate.outputs.output_path
-        if args.enable_cluster_tiles and "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](
-                annotations_json=post.outputs.output_path,
-                prepped_tiles_path=prepped_in
-            )
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](
-                    cluster_tiles_path=cluster_tiles.outputs.output_path,
-                    prepped_tiles_path=prepped_in
-                )
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
         return outputs
 
-    @pipeline(compute=COMPUTE_CLUSTER, description="Extract representative tiles and create filtered annotations")
-    def cluster_tiles_and_filtered_annotations_pipeline(postprocess_in, prepped_in):
+    # ---- cluster ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="From clustering onward (parallel)")
+    def pipe_cluster(prepped_in, segmented_in, seg_manifest_in):
+        clu = components["cluster"](trigger_path=seg_manifest_in, segmentation_path=segmented_in, prepped_tiles_path=prepped_in)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](trigger_path=clu.outputs.output_manifest, segmented_path=segmented_in, prepped_tiles_path=prepped_in, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=segmented_in, classification_path=cls.outputs.output_path)
+        outputs = {"final_output": post.outputs.output_path}
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
+        return outputs
+
+    @pipeline(compute=COMPUTE_CLUSTER, description="From clustering onward (sequential)")
+    def pipe_cluster_seq(prepped_in, segmented_in):
+        clu = components["cluster"](segmentation_path=segmented_in, prepped_tiles_path=prepped_in)
+        if args.use_separate_clustering_cluster: clu.compute = clustering_cluster_target
+        cls = components["classify"](segmented_path=segmented_in, prepped_tiles_path=prepped_in, cluster_path=clu.outputs.cluster_output)
+        post = components["post_process"](segmentation_path=segmented_in, classification_path=cls.outputs.output_path)
+        outputs = {"final_output": post.outputs.output_path}
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
+        return outputs
+
+    # ---- classify ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="From classification onward (parallel)")
+    def pipe_classify(prepped_in, segmented_in, clustered_in, clu_manifest_in):
+        cls = components["classify"](trigger_path=clu_manifest_in, segmented_path=segmented_in, prepped_tiles_path=prepped_in, cluster_path=clustered_in)
+        post = components["post_process"](segmentation_path=segmented_in, classification_path=cls.outputs.output_path)
+        outputs = {"final_output": post.outputs.output_path}
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
+        return outputs
+
+    @pipeline(compute=COMPUTE_CLUSTER, description="From classification onward (sequential)")
+    def pipe_classify_seq(prepped_in, segmented_in, clustered_in):
+        cls = components["classify"](segmented_path=segmented_in, prepped_tiles_path=prepped_in, cluster_path=clustered_in)
+        post = components["post_process"](segmentation_path=segmented_in, classification_path=cls.outputs.output_path)
+        outputs = {"final_output": post.outputs.output_path}
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
+        return outputs
+
+    # ---- post_process ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="From post-processing onward")
+    def pipe_post_process(prepped_in, segmented_in, classified_in):
+        post = components["post_process"](segmentation_path=segmented_in, classification_path=classified_in)
+        outputs = {"final_output": post.outputs.output_path}
+        _append_tail_steps(outputs, post.outputs.output_path, prepped_in)
+        return outputs
+
+    # ---- annotate ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="Annotate existing post-process results")
+    def pipe_annotate(postprocess_in, prepped_in):
         outputs = {}
-        
-        if "cluster_tiles" in components:
-            cluster_tiles = components["cluster_tiles"](annotations_json=postprocess_in,
-                                                       prepped_tiles_path=prepped_in)
-            outputs["cluster_tiles"] = cluster_tiles.outputs.output_path
-            
-            if args.enable_filtered_annotations and "filtered_annotation" in components:
-                filtered_annotate = components["filtered_annotation"](cluster_tiles_path=cluster_tiles.outputs.output_path,
-                                                                     prepped_tiles_path=prepped_in)
-                outputs["filtered_annotations"] = filtered_annotate.outputs.output_path
-            else:
-                outputs["message"] = "Filtered annotations not enabled"
-        else:
-            outputs["message"] = "Representative tile extraction not enabled"
-        
+        if "annotation" in components:
+            annotate = components["annotation"](annotations_json=postprocess_in, prepped_tiles_path=prepped_in)
+            outputs["annotations"] = annotate.outputs.output_path
         return outputs
 
-    # ------------- Pick + submit ------------- #
-    mode = args.mode
-    logging.info("Submitting mode: %s  (sequential=%s)", mode, use_sequential)
+    # ---- cluster_tiles (+ filtered annotations) ----
+    @pipeline(compute=COMPUTE_CLUSTER, description="Extract cluster tiles (and filtered annotations)")
+    def pipe_cluster_tiles(postprocess_in, prepped_in):
+        outputs = {}
+        if "cluster_tiles" in components:
+            ct = components["cluster_tiles"](annotations_json=postprocess_in, prepped_tiles_path=prepped_in)
+            outputs["cluster_tiles"] = ct.outputs.output_path
+            if args.enable_filtered_annotations and "filtered_annotation" in components:
+                fa = components["filtered_annotation"](cluster_tiles_path=ct.outputs.output_path, prepped_tiles_path=prepped_in)
+                outputs["filtered_annotations"] = fa.outputs.output_path
+        return outputs
+
+    # ================================================================ #
+    # Pick + submit
+    # ================================================================ #
+    step = args.start_from
+    logging.info("Submitting start_from=%s  (sequential=%s)", step, use_sequential)
     seq_tag = "seq_" if use_sequential else ""
-    exp_name = f"v1_{seq_tag}{mode}_{param_string}_{timestamp}"
+    exp_name = f"v1_{seq_tag}{step}_{param_string}_{timestamp}"
+
+    def _inp(uri):
+        return Input(type=AssetTypes.URI_FOLDER, path=uri)
 
     job = None
-    if mode == "prep_only":
+
+    if step == "data_prep":
         if use_sequential:
-            job = data_prep_pipeline_sequential(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+            job = pipe_data_prep_seq(raw_slides_input=_inp(args.raw_slides_uri))
         else:
-            job = data_prep_pipeline(slides_in=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
-    elif mode == "from_segmentation":
+            job = pipe_data_prep(raw_slides_input=_inp(args.raw_slides_uri))
+
+    elif step == "tile_filter":
+        # tile_filter → segment → ... (reuse the data_prep pipeline with prepped input as raw)
+        # Tile filter is the first thing that runs on already-prepped tiles.
+        # Re-use the from-segment pipeline since filter is embedded in data_prep flow.
+        logging.info("tile_filter start is equivalent to running --start_from segment with --filter_tiles")
         if use_sequential:
-            job = from_segmentation_pipeline_sequential(
-                prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-            )
+            job = pipe_segment_seq(prepped_in=_inp(args.prepped_data_uri))
         else:
             if not args.prepped_manifest_uri:
-                logging.error("Parallel from_segmentation mode requires --prepped_manifest_uri "
-                              "(e.g. {base_uri}/manifest_dp/ or {base_uri}/manifest_tf/ from a previous run)")
+                logging.error("Parallel start_from=tile_filter requires --prepped_manifest_uri")
                 return
-            job = from_segmentation_pipeline(
-                prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-                manifest_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_manifest_uri),
-            )
-    elif mode == "annotate_only":
-        if not args.enable_annotations:
-            logging.error("annotate_only mode requires --enable_annotations flag")
-            return
-        job = annotate_only_pipeline(
-            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
-            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-        )
-    elif mode == "extract_cluster_tiles_only":
-        if not args.enable_cluster_tiles:
-            logging.error("extract_cluster_tiles_only mode requires --enable_cluster_tiles flag")
-            return
-        job = cluster_tiles_only_pipeline(
-            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
-            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-        )
-    elif mode == "cluster_tiles_and_filtered_annotations":
-        if not args.enable_cluster_tiles:
-            logging.error("cluster_tiles_and_filtered_annotations mode requires --enable_cluster_tiles flag")
-            return
-        if not args.enable_filtered_annotations:
-            logging.error("cluster_tiles_and_filtered_annotations mode requires --enable_filtered_annotations flag")
-            return
-        job = cluster_tiles_and_filtered_annotations_pipeline(
-            postprocess_in=Input(type=AssetTypes.URI_FOLDER, path=args.postprocess_data_uri),
-            prepped_in=Input(type=AssetTypes.URI_FOLDER, path=args.prepped_data_uri),
-        )
-    else:  # full
+            job = pipe_segment(prepped_in=_inp(args.prepped_data_uri), manifest_in=_inp(args.prepped_manifest_uri))
+
+    elif step == "segment":
         if use_sequential:
-            job = full_pipeline_sequential(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+            job = pipe_segment_seq(prepped_in=_inp(args.prepped_data_uri))
         else:
-            job = full_pipeline(raw_slides_input=Input(type=AssetTypes.URI_FOLDER, path=args.raw_slides_uri))
+            if not args.prepped_manifest_uri:
+                logging.error("Parallel start_from=segment requires --prepped_manifest_uri")
+                return
+            job = pipe_segment(prepped_in=_inp(args.prepped_data_uri), manifest_in=_inp(args.prepped_manifest_uri))
+
+    elif step == "cluster":
+        if use_sequential:
+            job = pipe_cluster_seq(prepped_in=_inp(args.prepped_data_uri), segmented_in=_inp(args.segmented_data_uri))
+        else:
+            if not args.segmented_manifest_uri:
+                logging.error("Parallel start_from=cluster requires --segmented_manifest_uri")
+                return
+            job = pipe_cluster(
+                prepped_in=_inp(args.prepped_data_uri),
+                segmented_in=_inp(args.segmented_data_uri),
+                seg_manifest_in=_inp(args.segmented_manifest_uri),
+            )
+
+    elif step == "classify":
+        if use_sequential:
+            job = pipe_classify_seq(
+                prepped_in=_inp(args.prepped_data_uri),
+                segmented_in=_inp(args.segmented_data_uri),
+                clustered_in=_inp(args.clustered_data_uri),
+            )
+        else:
+            if not args.clustered_manifest_uri:
+                logging.error("Parallel start_from=classify requires --clustered_manifest_uri")
+                return
+            job = pipe_classify(
+                prepped_in=_inp(args.prepped_data_uri),
+                segmented_in=_inp(args.segmented_data_uri),
+                clustered_in=_inp(args.clustered_data_uri),
+                clu_manifest_in=_inp(args.clustered_manifest_uri),
+            )
+
+    elif step == "post_process":
+        job = pipe_post_process(
+            prepped_in=_inp(args.prepped_data_uri),
+            segmented_in=_inp(args.segmented_data_uri),
+            classified_in=_inp(args.classified_data_uri),
+        )
+
+    elif step == "annotate":
+        if not args.enable_annotations:
+            logging.error("start_from=annotate requires --enable_annotations flag")
+            return
+        job = pipe_annotate(
+            postprocess_in=_inp(args.postprocess_data_uri),
+            prepped_in=_inp(args.prepped_data_uri),
+        )
+
+    elif step == "cluster_tiles":
+        if not args.enable_cluster_tiles:
+            logging.error("start_from=cluster_tiles requires --enable_cluster_tiles flag")
+            return
+        job = pipe_cluster_tiles(
+            postprocess_in=_inp(args.postprocess_data_uri),
+            prepped_in=_inp(args.prepped_data_uri),
+        )
+
+    if job is None:
+        logging.error("No pipeline job created — check your --start_from and flags.")
+        return
 
     submitted = ml_client.jobs.create_or_update(job, experiment_name=exp_name)
     logging.info("Job submitted: %s", submitted.studio_url)
@@ -1605,7 +1607,7 @@ def run_pipeline():
 
 # --------------------------------------------------------------------------- #
 def validate_environment(args: argparse.Namespace):
-    """Validate that all required environment variables are set."""
+    """Validate that all required environment variables and URIs are set."""
     missing = []
     
     if not SUBSCRIPTION_ID:
@@ -1615,14 +1617,39 @@ def validate_environment(args: argparse.Namespace):
     if not WORKSPACE_NAME:
         missing.append("AZURE_ML_WORKSPACE_NAME")
 
-    mode_requires_openai = args.mode in {"full", "from_segmentation"}
-    if mode_requires_openai and not os.getenv("OPENAI_API_KEY"):
+    # Steps that involve classification need OpenAI
+    steps_needing_openai = {"data_prep", "tile_filter", "segment", "cluster", "classify"}
+    if args.start_from in steps_needing_openai and not os.getenv("OPENAI_API_KEY"):
         missing.append("OPENAI_API_KEY")
     
     if missing:
         raise EnvironmentError(
             f"Missing required environment variables: {', '.join(missing)}\n"
             f"Please create a .env file based on .env.example and fill in your values."
+        )
+
+    # Validate required URIs based on start_from
+    step = args.start_from
+    uri_errors = []
+    if step in ("tile_filter", "segment", "cluster", "classify", "post_process", "annotate", "cluster_tiles"):
+        if not args.prepped_data_uri:
+            uri_errors.append("--prepped_data_uri is required when starting from '{}'".format(step))
+    if step in ("cluster", "classify", "post_process"):
+        if not args.segmented_data_uri:
+            uri_errors.append("--segmented_data_uri is required when starting from '{}'".format(step))
+    if step == "classify":
+        if not args.clustered_data_uri:
+            uri_errors.append("--clustered_data_uri is required when starting from '{}'".format(step))
+    if step == "post_process":
+        if not args.classified_data_uri:
+            uri_errors.append("--classified_data_uri is required when starting from '{}'".format(step))
+    if step in ("annotate", "cluster_tiles"):
+        if not args.postprocess_data_uri:
+            uri_errors.append("--postprocess_data_uri is required when starting from '{}'".format(step))
+
+    if uri_errors:
+        raise ValueError(
+            "Missing required URI arguments:\n  " + "\n  ".join(uri_errors)
         )
 
 # --------------------------------------------------------------------------- #
