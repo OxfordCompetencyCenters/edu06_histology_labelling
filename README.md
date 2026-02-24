@@ -61,15 +61,19 @@ When exploring a clustered slide, **every cell is color-coded by its cluster**. 
 - **Representative Tile Extraction**: Selects high-confidence examples from each cluster
 - **Filtered Annotations**: Generates focused annotations covering all distinct cell structures
 
-### Supported Pipeline Modes
-| Mode | Description |
-|------|-------------|
-| `full` | Complete pipeline: prep → filter → segment → cluster → classify → post-process |
-| `prep_only` | Data preparation and optional tile filtering only |
-| `from_segmentation` | Run from segmentation onwards using existing prepped tiles |
-| `annotate_only` | Generate image annotations from existing results |
-| `extract_cluster_tiles_only` | Extract representative tiles from existing results |
-| `cluster_tiles_and_filtered_annotations` | Extract tiles and create filtered annotations |
+### Supported Pipeline Start Points
+The pipeline uses `--start_from` to select an entry point. Each step runs from that point onward through the rest of the pipeline:
+
+| `--start_from` | Description |
+|----------------|-------------|
+| `data_prep` | Complete pipeline: prep → filter → segment → cluster → classify → post-process (default) |
+| `tile_filter` | Tile filtering onwards using existing prepped tiles |
+| `segment` | Segmentation onwards using existing prepped tiles |
+| `cluster` | Clustering onwards using existing segmentation results |
+| `classify` | Classification onwards using existing clustering results |
+| `post_process` | Post-processing onwards using existing classification results |
+| `annotate` | Generate image annotations from existing post-process results |
+| `cluster_tiles` | Extract representative tiles (and filtered annotations) from existing post-process results |
 
 ---
 
@@ -136,7 +140,7 @@ This script submits jobs to **Azure Machine Learning**, so you must be authentic
 
 ### Full Pipeline
 ```bash
-python azureml_pipeline/pipeline_job.py --mode full \
+python azureml_pipeline/pipeline_job.py \
     --segment_use_gpu \
     --cluster_use_gpu \
     --cluster_normalize \
@@ -146,7 +150,7 @@ python azureml_pipeline/pipeline_job.py --mode full \
 
 ### With Tile Filtering
 ```bash
-python azureml_pipeline/pipeline_job.py --mode full \
+python azureml_pipeline/pipeline_job.py \
     --filter_tiles \
     --filter_min_edge_density 0.02 \
     --segment_use_gpu \
@@ -155,7 +159,7 @@ python azureml_pipeline/pipeline_job.py --mode full \
 
 ### With Annotations and Representative Tile Extraction
 ```bash
-python azureml_pipeline/pipeline_job.py --mode full \
+python azureml_pipeline/pipeline_job.py \
     --segment_use_gpu \
     --cluster_use_gpu \
     --enable_annotations \
@@ -164,9 +168,17 @@ python azureml_pipeline/pipeline_job.py --mode full \
     --cluster_analyzer_max_items 20
 ```
 
+### Process Only Specific Slides
+```bash
+python azureml_pipeline/pipeline_job.py \
+    --segment_use_gpu \
+    --cluster_use_gpu \
+    --slide_filter "Slide A,Slide B,Slide C"
+```
+
 ### Generate Annotations from Existing Results
 ```bash
-python azureml_pipeline/pipeline_job.py --mode annotate_only \
+python azureml_pipeline/pipeline_job.py --start_from annotate \
     --enable_annotations \
     --postprocess_data_uri "azureml://datastores/workspaceblobstore/paths/your_results/" \
     --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_tiles/"
@@ -174,15 +186,15 @@ python azureml_pipeline/pipeline_job.py --mode annotate_only \
 
 ### Run from Segmentation Onwards (Using Existing Tiles)
 ```bash
-python azureml_pipeline/pipeline_job.py --mode from_segmentation \
+python azureml_pipeline/pipeline_job.py --start_from segment \
     --segment_use_gpu \
     --cluster_use_gpu \
     --prepped_data_uri "azureml://datastores/workspaceblobstore/paths/your_previous_run/data_prep/"
 ```
 
-For parallel mode, also provide the manifest URI:
+For parallel mode (`--max_nodes > 1`), also provide the manifest URI:
 ```bash
-python azureml_pipeline/pipeline_job.py --mode from_segmentation \
+python azureml_pipeline/pipeline_job.py --start_from segment \
     --max_nodes 4 \
     --segment_use_gpu \
     --cluster_use_gpu \
@@ -192,7 +204,7 @@ python azureml_pipeline/pipeline_job.py --mode from_segmentation \
 
 ### Extract Representative Cluster Tiles
 ```bash
-python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
+python azureml_pipeline/pipeline_job.py --start_from cluster_tiles \
     --enable_cluster_tiles \
     --cluster_analyzer_confidence_threshold 0.75 \
     --postprocess_data_uri "azureml://datastores/workspaceblobstore/paths/your_results/" \
@@ -206,12 +218,20 @@ python azureml_pipeline/pipeline_job.py --mode extract_cluster_tiles_only \
 ### Input/Output URIs
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--raw_slides_uri` | `"azureml://..."` | URI to raw WSI slides (for `full` and `prep_only` modes) |
-| `--prepped_data_uri` | `"azureml://..."` | URI to prepped tiles (for `from_segmentation`, `annotate_only`, etc.) |
-| `--prepped_manifest_uri` | `None` | URI to manifest/trigger folder (needed for parallel `from_segmentation` mode) |
-| `--segmented_data_uri` | `"azureml://..."` | URI to segmented data |
-| `--clustered_data_uri` | `"azureml://..."` | URI to clustered data |
-| `--postprocess_data_uri` | `"azureml://..."` | URI to post-processed results (for `annotate_only`, `extract_cluster_tiles_only`, etc.) |
+| `--raw_slides_uri` | `"azureml://..."` | URI to raw WSI slides (for `start_from=data_prep`) |
+| `--prepped_data_uri` | `None` | URI to prepped tiles (required for `start_from` >= `tile_filter`) |
+| `--prepped_manifest_uri` | `None` | URI to manifest/trigger folder (parallel mode, `start_from=segment`) |
+| `--segmented_data_uri` | `None` | URI to segmentation results (required for `start_from` >= `cluster`) |
+| `--segmented_manifest_uri` | `None` | URI to segmentation manifest folder (parallel mode, `start_from=cluster`) |
+| `--clustered_data_uri` | `None` | URI to clustering results (required for `start_from=classify`) |
+| `--clustered_manifest_uri` | `None` | URI to clustering manifest folder (parallel mode, `start_from=classify`) |
+| `--classified_data_uri` | `None` | URI to classification results (required for `start_from=post_process`) |
+| `--postprocess_data_uri` | `None` | URI to post-process results (required for `start_from` >= `annotate`) |
+
+### Slide Subset Selection
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--slide_filter` | `None` | Comma-separated list of slide names to process (others are skipped). Matches against both original filenames and generated slide IDs. |
 
 ### Data Preparation
 | Parameter | Default | Description |
@@ -303,11 +323,15 @@ Parameters for annotating the representative tiles extracted by the cluster anal
 | `--filtered_annotation_color_by` | `"cluster_id"` | Color-code by: `pred_class`, `cluster_id`, `none` |
 | `--filtered_annotation_filter_unclassified` | `True` | Filter out unclassified cells (default: filtered) |
 
-### Multi-Node Parallelization
-Control how the pipeline distributes work across compute nodes. The pipeline uses **slide-level parallelization** via Azure ML's `parallel_run_function` where each slide is processed independently:
+### Execution Modes: Sequential vs Parallel
 
-| Stage | Parallel Entry Script | Description |
-|-------|----------------------|-------------|
+The pipeline automatically selects its execution mode based on `--max_nodes`:
+
+- **`--max_nodes 1`** (default): Uses sequential `command()`-based jobs with simple linear logs, ideal for debugging.
+- **`--max_nodes > 1`**: Uses `parallel_run_function` for multi-node slide-level parallelism, where each slide is processed independently.
+
+| Stage | Entry Script | Description |
+|-------|-------------|-------------|
 | Data prep | `parallel_data_prep.py` | Each WSI file is tiled independently |
 | Tile filtering | `parallel_tile_filter.py` | Filters tiles per slide |
 | Segmentation | `parallel_segment.py` | Cellpose processes each slide's tiles |
@@ -315,14 +339,11 @@ Control how the pipeline distributes work across compute nodes. The pipeline use
 | Classification | `parallel_classify.py` | Each slide classified independently |
 | Post-processing | `post_process.py` | Aggregates per-slide results (single node) |
 | Annotation | `annotate_images.py` | Per-slide output files (single node) |
-
-When `--max_nodes > 1`:
-- Multiple slides are processed in parallel across compute nodes
-- Each node processes one slide at a time (mini-batch size = 1)
+| Cluster tile extraction | `cluster_analyzer.py` | Extracts representative tiles by cluster (single node) |
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--max_nodes` | `1` | Maximum number of compute nodes (1 = single node, no parallelization) |
+| `--max_nodes` | `1` | Maximum number of compute nodes (1 = sequential, >1 = parallel) |
 | `--processes_per_node` | `1` | Number of processes per node (set >1 for multi-GPU nodes) |
 | `--mini_batch_size` | `1` | Number of slides per mini-batch (default: 1 slide per batch) |
 | `--mini_batch_error_threshold` | `5` | Number of failed mini-batches allowed before failing the job |
@@ -333,7 +354,7 @@ When `--max_nodes > 1`:
 
 #### Example: Multi-Node Full Pipeline (10 nodes)
 ```bash
-python azureml_pipeline/pipeline_job.py --mode full \
+python azureml_pipeline/pipeline_job.py \
     --max_nodes 10 \
     --segment_use_gpu \
     --cluster_use_gpu \
