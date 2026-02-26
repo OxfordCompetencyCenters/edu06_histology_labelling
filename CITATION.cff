@@ -26,6 +26,6 @@ keywords:
   - image-analysis
   - medical-imaging
   - whole-slide-imaging
-version: "1.0.0"
-date-released: "2026-02-02"
-doi: "10.5281/zenodo.18458496"
+version: "1.1.0"
+date-released: "2026-02-26"
+doi: "10.5281/zenodo.18788430"
