@@ -368,19 +368,59 @@ AZURE_ML_CLUSTERING_CLUSTER=your-highmem-cpu-cluster
 
 ---
 
+## Labelling App
+
+A lightweight web app for manually labelling cells in pipeline output and measuring how well model clusters align with human judgement. Built with **FastAPI**.
+
+### Purpose
+
+The pipeline groups cells into clusters automatically, but cluster labels need human validation. This app lets you:
+
+1. **Review** sampled tiles from pipeline output, with each cell's segmentation polygon overlaid on the image
+2. **Label** cells by defining label classes and clicking on cell polygons to assign them
+3. **Evaluate** how well the model's unsupervised clusters match your human labels, using per-tile Hungarian alignment and confusion matrices
+
+### How to Use
+
+The app is designed to be intuitive. For a visual walkthrough, see the screenshots in [`labelling_app/walkthrough_imgs/`](labelling_app/walkthrough_imgs/).
+
+![Labelling App](labelling_app/walkthrough_imgs/6.jpg)
+
+1. **Load data** — Enter or browse to a directory containing `batch_*` folders (produced by `sample_patches_for_qa.ipynb`). Select a batch and click **Assess**.
+2. **Define labels** — In the sidebar, add label classes (a number and optional name). Click a label in the legend to make it the "active" label.
+3. **Label cells** — Left-click a cell polygon to assign the active label. Right-click to remove a label. Use `←` / `→` arrows to navigate between tiles. Hold `H` to highlight unlabelled cells.
+4. **Save** — Click the save button to export your labels as a timestamped `human_labels_*.json` file in the batch directory.
+5. **Evaluate** — Open the Evaluate modal, select a saved human labels file, and run the comparison. The app shows batch-level accuracy, per-tile confusion matrices, and a visual overlay of matches (green) vs mismatches (red).
+
+### Prerequisites
+
+The app expects pipeline output organised in `batch_*` directories, each containing a `cell_labels.json` file and corresponding tile images (as produced by the `sample_patches_for_qa.ipynb` notebook).
+
+### Running Locally
+
+```bash
+cd labelling_app
+pip install -r requirements.txt
+python server.py
+```
+
+Then open **http://localhost:8000** in your browser.
+
+### Running with Docker
+
+```bash
+cd labelling_app
+docker build -t histology-labelling .
+docker run -p 8000:8000 -v /path/to/your/data:/data histology-labelling
+```
+
+Mount your pipeline output directory so the app can access batch data.
+
+---
+
 ## Performance Observations
 
-### Strong Performance
-- **Skeletal muscle**: Excellent segmentation of multinucleated fibers with consistent cluster assignment
-- **Pancreas (exocrine)**: High accuracy in detecting acinar cells with clear boundaries
-- **Adrenal cortex**: Good performance in zona glomerulosa and fasciculata regions
-
-### Moderate Performance
-- **Thyroid gland**: Partial success with follicular cells; struggles with flattened epithelium
-
-### Challenging Cases
-- **Posterior pituitary**: Poor performance due to unmyelinated nerve fibers and sparse glial cells
-- **Densely packed tissues**: May require tissue-specific parameter tuning
+Segmentation and clustering performance may vary by tissue type and morphology. Densely packed tissues or those with unusual cell shapes may require tissue-specific parameter tuning for optimal results.
 
 ---
 

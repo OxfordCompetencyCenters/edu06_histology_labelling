@@ -1,0 +1,2004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Histology Cell Labelling</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #111827;
+            color: #e5e7eb;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Toolbar ────────────────────────────────────────── */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            background: #1f2937;
+            border-bottom: 1px solid #374151;
+            flex-shrink: 0;
+        }
+        .toolbar input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 14px;
+            min-width: 200px;
+        }
+        .toolbar input[type="text"]::placeholder { color: #6b7280; }
+        .toolbar input[type="text"]:focus { outline: none; border-color: #8b5cf6; }
+        .toolbar select {
+            padding: 8px 12px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 14px;
+        }
+        .toolbar select:disabled { opacity: 0.5; }
+        .btn {
+            padding: 8px 16px;
+            background: #7c3aed;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn:hover { background: #6d28d9; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #statusText { font-size: 13px; color: #9ca3af; white-space: nowrap; }
+
+        /* ── Main layout ────────────────────────────────────── */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Canvas area */
+        .canvas-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f172a;
+            overflow: auto;
+            padding: 16px;
+        }
+        canvas {
+            display: block;
+            border: 1px solid #374151;
+            background: #000;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            flex-shrink: 0;
+            background: #1f2937;
+            border-left: 1px solid #374151;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .panel {
+            background: #111827;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .panel h3 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8b5cf6;
+            margin-bottom: 10px;
+        }
+
+        /* Navigation */
+        .nav-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .nav-btn {
+            padding: 6px 14px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .nav-btn:hover { background: #4b5563; }
+        .nav-counter { font-size: 14px; font-weight: 600; }
+        .tile-info {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #9ca3af;
+            word-break: break-all;
+        }
+
+        /* Selected-cell panel */
+        .cell-info {
+            font-size: 13px;
+            color: #9ca3af;
+            margin-bottom: 8px;
+        }
+        .label-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .label-row input[type="number"] {
+            width: 70px;
+            padding: 6px 8px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 14px;
+        }
+        .label-row input[type="number"]:focus { outline: none; border-color: #8b5cf6; }
+        .btn-set { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; background: #059669; color: white; }
+        .btn-set:hover { background: #047857; }
+        .btn-clear { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; background: #4b5563; color: #e5e7eb; }
+        .btn-clear:hover { background: #6b7280; }
+
+        /* Active label indicator */
+        .active-label-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            background: #374151;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .active-label-indicator .swatch {
+            width: 20px;
+            height: 20px;
+        }
+        .active-label-indicator.eraser {
+            background: #4b2020;
+            color: #f87171;
+        }
+        .active-label-none {
+            color: #6b7280;
+            font-size: 13px;
+            font-style: italic;
+        }
+
+        /* Legend label items — clickable */
+        .legend-label-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+            font-size: 13px;
+            padding: 4px 8px;
+            border-radius: 5px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .legend-label-item:hover {
+            background: #263040;
+        }
+        .legend-label-item.active {
+            border-color: #8b5cf6;
+            background: #1e293b;
+        }
+        .legend-label-item .remove-label {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+            line-height: 1;
+        }
+        .legend-label-item .remove-label:hover {
+            color: #f87171;
+        }
+        .add-label-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-top: 8px;
+            min-width: 0;
+        }
+        .add-label-row input[type="number"] {
+            width: 50px;
+            flex-shrink: 0;
+            padding: 5px 6px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 13px;
+        }
+        .add-label-row input[type="number"]:focus { outline: none; border-color: #8b5cf6; }
+        .add-label-row input[type="text"] {
+            flex: 1;
+            min-width: 0;
+            padding: 5px 6px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 13px;
+        }
+        .add-label-row input[type="text"]:focus { outline: none; border-color: #8b5cf6; }
+        .add-label-row .btn-set {
+            flex-shrink: 0;
+        }
+        .eraser-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+            font-size: 13px;
+            padding: 4px 8px;
+            border-radius: 5px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: border-color 0.15s, background 0.15s;
+            color: #f87171;
+        }
+        .eraser-item:hover {
+            background: #2a1a1a;
+        }
+        .eraser-item.active {
+            border-color: #f87171;
+            background: #2a1a1a;
+        }
+
+        /* Progress */
+        .progress-section { margin-bottom: 10px; }
+        .progress-label { font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
+        .progress-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: #374151;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #8b5cf6;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .progress-text { font-size: 13px; font-weight: 600; margin-top: 4px; }
+
+        /* Legend */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+        .swatch {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border: 1px solid rgba(255,255,255,0.2);
+            flex-shrink: 0;
+        }
+
+        /* Color settings */
+        .color-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        .color-row label {
+            flex: 1;
+            color: #d1d5db;
+        }
+        .color-row input[type="color"] {
+            width: 32px;
+            height: 24px;
+            border: 1px solid #4b5563;
+            border-radius: 4px;
+            background: #374151;
+            cursor: pointer;
+            padding: 1px 2px;
+        }
+        .color-row input[type="range"] {
+            width: 50px;
+            accent-color: #8b5cf6;
+        }
+        .color-row .alpha-val {
+            width: 28px;
+            text-align: right;
+            font-size: 11px;
+            color: #9ca3af;
+        }
+        .color-section-title {
+            font-size: 12px;
+            color: #6b7280;
+            margin: 8px 0 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .color-section-title:first-child { margin-top: 0; }
+
+        /* Save */
+        .save-btn {
+            width: 100%;
+            padding: 10px;
+            background: #7c3aed;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .save-btn:hover { background: #6d28d9; }
+        #saveStatus {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #10b981;
+            word-break: break-all;
+        }
+
+        .placeholder {
+            color: #6b7280;
+            text-align: center;
+            padding: 40px;
+            font-size: 16px;
+        }
+
+        /* ── Browse Modal ──────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid #374151;
+        }
+        .modal-header h2 { font-size: 16px; font-weight: 600; color: #e5e7eb; }
+        .modal-close {
+            background: none; border: none; color: #9ca3af;
+            font-size: 22px; cursor: pointer; padding: 4px 8px;
+        }
+        .modal-close:hover { color: #e5e7eb; }
+        .modal-breadcrumb {
+            padding: 10px 20px;
+            font-size: 13px;
+            color: #9ca3af;
+            background: #111827;
+            border-bottom: 1px solid #374151;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .modal-breadcrumb .bc-seg {
+            cursor: pointer;
+            color: #8b5cf6;
+        }
+        .modal-breadcrumb .bc-seg:hover { text-decoration: underline; }
+        .modal-breadcrumb .bc-sep { color: #4b5563; }
+        .modal-breadcrumb .bc-current { color: #e5e7eb; }
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 12px;
+        }
+        .browse-entry {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #e5e7eb;
+        }
+        .browse-entry:hover { background: #374151; }
+        .browse-entry .entry-icon { font-size: 18px; flex-shrink: 0; width: 24px; text-align: center; }
+        .browse-entry .entry-name { flex: 1; word-break: break-all; }
+        .browse-entry .entry-badge {
+            font-size: 11px;
+            background: #059669;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+        .browse-empty {
+            text-align: center;
+            color: #6b7280;
+            padding: 30px 12px;
+            font-size: 14px;
+        }
+        .modal-footer {
+            padding: 12px 20px;
+            border-top: 1px solid #374151;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .modal-footer .btn-scan-here {
+            padding: 8px 20px;
+            background: #059669;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .modal-footer .btn-scan-here:hover { background: #047857; }
+        .modal-footer .btn-scan-here:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ── Evaluate results ──────────────────────── */
+        .eval-card {
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            padding: 14px;
+        }
+        .eval-card h4 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8b5cf6;
+            margin-bottom: 10px;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .metric-item {
+            background: #111827;
+            border-radius: 6px;
+            padding: 10px 14px;
+        }
+        .metric-name {
+            font-size: 11px;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .metric-value {
+            font-size: 22px;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+        .metric-value.good { color: #34d399; }
+        .metric-value.ok   { color: #fbbf24; }
+        .metric-value.bad  { color: #f87171; }
+        .eval-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .eval-table th {
+            text-align: left;
+            padding: 6px 10px;
+            border-bottom: 1px solid #4b5563;
+            color: #9ca3af;
+            font-weight: 600;
+        }
+        .eval-table td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #1f2937;
+        }
+
+        /* ── Tile comparison viewer ──────────────── */
+        .eval-tile-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .eval-tile-nav button {
+            padding: 6px 14px;
+            background: #374151;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .eval-tile-nav button:hover { background: #4b5563; }
+        .eval-tile-counter { font-size: 14px; font-weight: 600; }
+        .eval-canvas-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f172a;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            padding: 8px;
+            min-height: 200px;
+            margin-bottom: 12px;
+        }
+        .eval-canvas-wrap canvas {
+            display: block;
+            border: 1px solid #374151;
+            background: #000;
+        }
+        .eval-legend-row {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .eval-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .eval-legend-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .eval-tile-stats {
+            font-size: 13px;
+            color: #d1d5db;
+            margin-bottom: 8px;
+        }
+        .eval-cm-wrap {
+            overflow-x: auto;
+        }
+        .eval-cm-wrap h5 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: #8b5cf6;
+            margin-bottom: 6px;
+        }
+        .eval-cm-table {
+            border-collapse: collapse;
+            font-size: 13px;
+            min-width: auto;
+        }
+        .eval-cm-table th, .eval-cm-table td {
+            padding: 5px 10px;
+            text-align: center;
+            border: 1px solid #374151;
+        }
+        .eval-cm-table th {
+            background: #1f2937;
+            color: #9ca3af;
+            font-weight: 600;
+        }
+        .eval-cm-table td {
+            background: #111827;
+        }
+        .eval-cm-table td.cm-diag {
+            background: rgba(52,211,153,0.15);
+            color: #34d399;
+            font-weight: 700;
+        }
+        .eval-cm-table td.cm-off {
+            color: #f87171;
+        }
+        .eval-cm-table .cm-row-label {
+            background: #1f2937;
+            color: #9ca3af;
+            font-weight: 600;
+            text-align: right;
+        }
+        .eval-cm-axis-label {
+            font-size: 11px;
+            color: #6b7280;
+            margin-bottom: 2px;
+        }
+
+        /* Highlight Missing Labels */
+        .highlight-btn {
+            width: 100%;
+            padding: 10px;
+            background: #b45309;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            transition: background 0.15s;
+        }
+        .highlight-btn:hover { background: #a3480b; }
+        .highlight-btn:active, .highlight-btn.active {
+            background: #f59e0b;
+            color: #111827;
+        }
+        .highlight-hint {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 4px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+
+<!-- ── Toolbar ──────────────────────────────────────────────── -->
+<div class="toolbar">
+    <input type="text" id="dirPath"
+           placeholder="Path to qa_sample folder or folder containing the zip">
+    <button class="btn" onclick="openBrowser()">Browse</button>
+    <button class="btn" onclick="scanDir()">Scan</button>
+    <select id="batchSelect" disabled>
+        <option value="">-- Select Batch --</option>
+    </select>
+    <button class="btn" onclick="assess()" id="assessBtn" disabled>Assess</button>
+    <button class="btn" onclick="openEvaluate()" id="evaluateBtn" disabled style="background:#059669">Evaluate</button>
+    <span id="statusText"></span>
+</div>
+
+<!-- ── Browse Modal ─────────────────────────────────────────── -->
+<div class="modal-overlay" id="browseModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>Browse for Data</h2>
+            <button class="modal-close" onclick="closeBrowser()">&times;</button>
+        </div>
+        <div class="modal-breadcrumb" id="browseBreadcrumb"></div>
+        <div class="modal-body" id="browseBody">
+            <div class="browse-empty">Enter a starting path and click Browse.</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-scan-here" id="btnScanHere" disabled onclick="scanFromBrowser()">Scan This Folder</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Evaluate Modal ────────────────────────────────────────── -->
+<div class="modal-overlay" id="evalModal">
+    <div class="modal" style="width:90vw;max-width:1200px">
+        <div class="modal-header">
+            <h2>Evaluate Model Performance</h2>
+            <button class="modal-close" onclick="closeEvaluate()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding:20px">
+            <div style="margin-bottom:16px">
+                <label style="font-size:14px;display:block;margin-bottom:6px;color:#d1d5db">Select human labels file:</label>
+                <select id="humanLabelsSelect" style="width:100%;padding:8px 12px;background:#374151;border:1px solid #4b5563;border-radius:6px;color:#e5e7eb;font-size:14px">
+                    <option value="">Loading…</option>
+                </select>
+            </div>
+            <button class="btn" onclick="runEvaluate()" id="runEvalBtn" style="background:#059669;margin-bottom:16px">Run Evaluation</button>
+            <div id="evalResults" style="display:none">
+                <div id="evalSummary" style="margin-bottom:16px"></div>
+                <div id="evalMetrics" style="margin-bottom:16px"></div>
+                <button class="btn" onclick="saveMetrics()" id="saveMetricsBtn" style="background:#2563eb;margin-bottom:16px">Save Metrics</button>
+                <div id="saveMetricsMsg" style="font-size:13px;margin-bottom:12px;display:none"></div>
+                <div id="evalTileViewer"></div>
+            </div>
+            <div id="evalError" style="color:#f87171;font-size:14px;display:none"></div>
+            <div id="evalLoading" style="color:#9ca3af;font-size:14px;display:none">Computing metrics…</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Main area ────────────────────────────────────────────── -->
+<div class="main">
+    <div class="canvas-wrap" id="canvasWrap">
+        <div class="placeholder" id="placeholder">
+            Enter a directory path and click <b>Scan</b>, then select a batch
+            and click <b>Assess</b>.
+        </div>
+        <canvas id="canvas" style="display:none"></canvas>
+    </div>
+
+    <div class="sidebar" id="sidebar" style="display:none">
+
+        <!-- Tile navigation -->
+        <div class="panel">
+            <h3>Tile Navigation</h3>
+            <div class="nav-row">
+                <button class="nav-btn" onclick="prevTile()">&#9664; Prev</button>
+                <span class="nav-counter" id="tileCounter">0 / 0</span>
+                <button class="nav-btn" onclick="nextTile()">Next &#9654;</button>
+            </div>
+            <div class="tile-info" id="tileInfo"></div>
+        </div>
+
+        <!-- Active label mode -->
+        <div class="panel">
+            <h3>Active Label</h3>
+            <div id="activeLabelDisplay" class="active-label-none">No label selected — pick one from the legend below</div>
+        </div>
+
+        <!-- Selected cell -->
+        <div class="panel">
+            <h3>Selected Cell</h3>
+            <div class="cell-info" id="cellInfo">Click a cell to assign the active label</div>
+        </div>
+
+        <!-- Progress -->
+        <div class="panel">
+            <h3>Progress</h3>
+            <div class="progress-section">
+                <div class="progress-label">This tile</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="tileProgressBar" style="width:0%"></div>
+                </div>
+                <div class="progress-text" id="tileProgressText">0 / 0</div>
+            </div>
+            <div class="progress-section">
+                <div class="progress-label">Entire batch</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="batchProgressBar" style="width:0%"></div>
+                </div>
+                <div class="progress-text" id="batchProgressText">0 / 0</div>
+            </div>
+        </div>
+
+        <!-- Highlight Missing Labels -->
+        <div class="panel">
+            <h3>Highlight Missing Labels</h3>
+            <button class="highlight-btn" id="highlightBtn"
+                    onmousedown="startHighlight()" onmouseup="stopHighlight()" onmouseleave="stopHighlight()">
+                &#128269; Hold to Highlight Unlabelled
+            </button>
+            <div class="highlight-hint">Or hold <kbd>H</kbd> key</div>
+            <div class="color-section-title" style="margin-top:10px">Highlight Appearance</div>
+            <div class="color-row">
+                <label>Color</label>
+                <input type="color" id="colorHighlightMissing" value="#ff0000" oninput="onColorChange()">
+            </div>
+            <div class="color-row">
+                <label>Fill</label>
+                <input type="range" id="alphaHighlightFill" min="0" max="100" value="45" oninput="onHighlightSettingChange()">
+                <span class="alpha-val" id="alphaHighlightFillVal">45%</span>
+            </div>
+            <div class="color-row">
+                <label>Stroke</label>
+                <input type="range" id="alphaHighlightStroke" min="0" max="100" value="90" oninput="onHighlightSettingChange()">
+                <span class="alpha-val" id="alphaHighlightStrokeVal">90%</span>
+            </div>
+        </div>
+
+        <!-- Color Settings -->
+        <div class="panel">
+            <h3>Color Settings</h3>
+            <div class="color-section-title">Unlabelled Cells</div>
+            <div class="color-row">
+                <label>Fill</label>
+                <input type="color" id="colorUnlabelledFill" value="#b48cd2" oninput="onColorChange()">
+                <input type="range" id="alphaUnlabelledFill" min="0" max="100" value="30" oninput="onColorChange()">
+                <span class="alpha-val" id="alphaUnlabelledFillVal">30%</span>
+            </div>
+            <div class="color-row">
+                <label>Stroke</label>
+                <input type="color" id="colorUnlabelledStroke" value="#a078c8" oninput="onColorChange()">
+                <input type="range" id="alphaUnlabelledStroke" min="0" max="100" value="60" oninput="onColorChange()">
+                <span class="alpha-val" id="alphaUnlabelledStrokeVal">60%</span>
+            </div>
+            <div class="color-section-title">Selected Cell</div>
+            <div class="color-row">
+                <label>Stroke</label>
+                <input type="color" id="colorSelected" value="#ffff00" oninput="onColorChange()">
+                <input type="range" id="alphaSelected" min="0" max="100" value="95" oninput="onColorChange()">
+                <span class="alpha-val" id="alphaSelectedVal">95%</span>
+            </div>
+            <div class="color-section-title">Label Colors</div>
+            <div id="labelColorRows"></div>
+        </div>
+
+        <!-- Legend / Label Picker -->
+        <div class="panel">
+            <h3>Label Legend</h3>
+            <div id="legend">
+                <div class="legend-item">
+                    <div class="swatch" style="background:rgba(160,120,200,0.6)"></div>
+                    <span>Unlabelled</span>
+                </div>
+            </div>
+            <div class="add-label-row">
+                <input type="number" id="newLabelNum" min="0" max="99" placeholder="#">
+                <input type="text" id="newLabelName" placeholder="Name (optional)">
+                <button class="btn-set" onclick="addNewLabel()">Add</button>
+            </div>
+        </div>
+
+        <!-- Save -->
+        <div class="panel">
+            <button class="save-btn" onclick="saveLabels()">&#128190; Save Labels</button>
+            <div id="saveStatus"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Application logic ────────────────────────────────────── -->
+<script>
+// ================================================================
+// State
+// ================================================================
+const S = {
+    dataDir:        '',
+    batches:        [],
+    currentBatch:   '',
+    tileData:       null,   // { batch, tiles: [...] }
+    currentTileIdx: 0,
+    labels:         {},     // { tileIdx: { cellId: humanLabel } }
+    selectedCellId: null,
+    scale:          1,
+    currentImage:   null,
+    dirty:          false,
+    activeLabel:    null,   // currently selected label number (or 'eraser')
+    definedLabels:  [],     // [{num, name}] — user-defined labels
+    highlightMissing: false, // true while highlight button/key is held
+};
+
+const MAX_W = 950;
+const MAX_H = 750;
+
+// ================================================================
+// Colour helpers
+// ================================================================
+const PALETTE = [
+    '#e74c3c','#2ecc71','#3498db','#f1c40f','#e67e22',
+    '#1abc9c','#9b59b6','#e84393','#00b894','#fd79a8',
+    '#6c5ce7','#00cec9','#fdcb6e','#ff7675','#a29bfe',
+    '#d63031','#74b9ff','#55efc4','#fab1a0','#81ecec',
+];
+
+// Custom color overrides per label: { labelNum: '#hexcolor' }
+const labelColors = {};
+
+function hexRgba(hex, a) {
+    return `rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${parseInt(hex.slice(5,7),16)},${a})`;
+}
+
+function getUnlabelledFill() {
+    const c = document.getElementById('colorUnlabelledFill').value;
+    const a = document.getElementById('alphaUnlabelledFill').value / 100;
+    return hexRgba(c, a);
+}
+function getUnlabelledStroke() {
+    const c = document.getElementById('colorUnlabelledStroke').value;
+    const a = document.getElementById('alphaUnlabelledStroke').value / 100;
+    return hexRgba(c, a);
+}
+function getSelectedStroke() {
+    const c = document.getElementById('colorSelected').value;
+    const a = document.getElementById('alphaSelected').value / 100;
+    return hexRgba(c, a);
+}
+function labelHex(l)    { return labelColors[l] || PALETTE[l % PALETTE.length]; }
+function labelFill(l)   { return hexRgba(labelHex(l), 0.40); }
+function labelStroke(l)  { return hexRgba(labelHex(l), 0.85); }
+
+// ================================================================
+// Geometry
+// ================================================================
+function ptInPoly(px, py, poly, s) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0]*s, yi = poly[i][1]*s;
+        const xj = poly[j][0]*s, yj = poly[j][1]*s;
+        if ((yi > py) !== (yj > py) && px < (xj-xi)*(py-yi)/(yj-yi)+xi)
+            inside = !inside;
+    }
+    return inside;
+}
+
+function centroid(poly) {
+    let cx=0,cy=0;
+    for (const p of poly) { cx+=p[0]; cy+=p[1]; }
+    return [cx/poly.length, cy/poly.length];
+}
+
+function polyArea(poly) {
+    let a=0;
+    for (let i=0,j=poly.length-1; i<poly.length; j=i++) {
+        a += poly[j][0]*poly[i][1] - poly[i][0]*poly[j][1];
+    }
+    return Math.abs(a/2);
+}
+
+// ================================================================
+// API helpers
+// ================================================================
+async function scanDir() {
+    const path = document.getElementById('dirPath').value.trim();
+    if (!path) return setStatus('Please enter a directory path.');
+    setStatus('Scanning\u2026');
+    try {
+        const r = await fetch('/api/scan', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({path}),
+        });
+        const d = await r.json();
+        if (!r.ok) { setStatus(d.detail||d.error||'Scan failed'); return; }
+
+        S.dataDir = d.data_dir;
+        S.batches = d.batches;
+
+        const sel = document.getElementById('batchSelect');
+        sel.innerHTML = '<option value="">-- Select Batch --</option>';
+        for (const b of d.batches)
+            sel.innerHTML += `<option value="${b}">${b}</option>`;
+        sel.disabled = false;
+        document.getElementById('assessBtn').disabled = false;
+        setStatus(`Found ${d.batches.length} batch(es) in ${d.data_dir}`);
+    } catch(e) { setStatus('Error: '+e.message); }
+}
+
+async function assess() {
+    const batch = document.getElementById('batchSelect').value;
+    if (!batch) return setStatus('Select a batch first.');
+    if (S.dirty && !confirm('You have unsaved labels. Continue without saving?')) return;
+
+    setStatus('Loading tiles\u2026');
+    try {
+        const url = `/api/tiles?data_dir=${enc(S.dataDir)}&batch=${enc(batch)}`;
+        const r = await fetch(url);
+        const d = await r.json();
+        if (!r.ok) { setStatus(d.detail||d.error||'Load failed'); return; }
+
+        S.currentBatch   = batch;
+        S.tileData       = d;
+        S.currentTileIdx = 0;
+        S.labels         = {};
+        S.selectedCellId = null;
+        S.dirty          = false;
+        S.activeLabel    = null;
+        S.definedLabels  = [];
+
+        document.getElementById('placeholder').style.display = 'none';
+        document.getElementById('canvas').style.display = 'block';
+        document.getElementById('sidebar').style.display = 'flex';
+        document.getElementById('saveStatus').textContent = '';
+        document.getElementById('evaluateBtn').disabled = false;
+
+        loadTile(0);
+        setStatus(`Loaded ${d.tiles.length} tile(s) from ${batch}`);
+    } catch(e) { setStatus('Error: '+e.message); }
+}
+
+async function saveLabels() {
+    if (!S.tileData) return;
+
+    const tiles = S.tileData.tiles.map((tile, idx) => {
+        const tl = S.labels[idx] || {};
+        return {
+            tile_index:     idx,
+            slide_id:       tile.slide_id,
+            tile_name:      tile.tile_name,
+            total_cells:    (tile.cells||[]).length,
+            labelled_cells: Object.entries(tl).map(([cid,lab]) => ({
+                cell_id: parseInt(cid), human_label: lab,
+            })),
+        };
+    }).filter(t => t.labelled_cells.length > 0);
+
+    if (tiles.length === 0) {
+        document.getElementById('saveStatus').textContent = 'Nothing to save \u2014 no labels assigned yet.';
+        return;
+    }
+
+    try {
+        const r = await fetch('/api/save', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ data_dir:S.dataDir, batch:S.currentBatch, tiles }),
+        });
+        const d = await r.json();
+        if (d.success) {
+            S.dirty = false;
+            document.getElementById('saveStatus').textContent = `Saved to: ${d.path}`;
+        } else {
+            document.getElementById('saveStatus').textContent = `Error: ${d.detail||d.error}`;
+        }
+    } catch(e) {
+        document.getElementById('saveStatus').textContent = 'Save failed: '+e.message;
+    }
+}
+
+function enc(s) { return encodeURIComponent(s); }
+function setStatus(m) { document.getElementById('statusText').textContent = m; }
+
+// ================================================================
+// Tile loading & rendering
+// ================================================================
+function loadTile(idx) {
+    const tiles = S.tileData.tiles;
+    if (idx < 0 || idx >= tiles.length) return;
+    S.currentTileIdx = idx;
+    S.selectedCellId = null;
+
+    const tile = tiles[idx];
+    const url  = `/api/image?data_dir=${enc(S.dataDir)}&batch=${enc(S.currentBatch)}&filename=${enc(tile.image_filename)}`;
+
+    const img = new Image();
+    img.onload = () => {
+        S.currentImage = img;
+        S.scale = Math.min(MAX_W / img.naturalWidth, MAX_H / img.naturalHeight, 1);
+        const cv = document.getElementById('canvas');
+        cv.width  = Math.round(img.naturalWidth  * S.scale);
+        cv.height = Math.round(img.naturalHeight * S.scale);
+        drawTile();
+        updateSidebar();
+    };
+    img.onerror = () => {
+        setStatus(`Failed to load image for tile ${idx+1}`);
+        updateSidebar();
+    };
+    img.src = url;
+}
+
+function drawTile() {
+    const cv  = document.getElementById('canvas');
+    const ctx = cv.getContext('2d');
+    const s   = S.scale;
+
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (S.currentImage) ctx.drawImage(S.currentImage, 0, 0, cv.width, cv.height);
+
+    const tile = S.tileData.tiles[S.currentTileIdx];
+    if (!tile || !tile.cells) return;
+
+    const tl = S.labels[S.currentTileIdx] || {};
+
+    // Draw larger polygons first so smaller ones sit on top
+    const sorted = [...tile.cells].sort((a,b) => {
+        return (b.polygon ? polyArea(b.polygon) : 0) - (a.polygon ? polyArea(a.polygon) : 0);
+    });
+
+    for (const cell of sorted) {
+        if (!cell.polygon || cell.polygon.length < 3) continue;
+        const label = tl[cell.cell_id];
+        const hasLabel = label !== undefined && label !== null;
+
+        // Path
+        ctx.beginPath();
+        ctx.moveTo(cell.polygon[0][0]*s, cell.polygon[0][1]*s);
+        for (let i=1; i<cell.polygon.length; i++)
+            ctx.lineTo(cell.polygon[i][0]*s, cell.polygon[i][1]*s);
+        ctx.closePath();
+
+        // Fill
+        ctx.fillStyle = hasLabel ? labelFill(label) : getUnlabelledFill();
+        ctx.fill();
+
+        // Stroke
+        ctx.strokeStyle = hasLabel ? labelStroke(label) : getUnlabelledStroke();
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
+        // Label number at centroid
+        if (hasLabel) {
+            const [cx,cy] = centroid(cell.polygon);
+            const sx = cx*s, sy = cy*s;
+            const txt = label.toString();
+            ctx.font = 'bold 13px Segoe UI, Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const m = ctx.measureText(txt);
+            const r = Math.max(m.width/2+4, 10);
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.fillText(txt, sx, sy);
+        }
+    }
+
+    // Highlight unlabelled cells overlay
+    if (S.highlightMissing) {
+        const hlColor = document.getElementById('colorHighlightMissing').value;
+        const hlFillA = document.getElementById('alphaHighlightFill').value / 100;
+        const hlStrokeA = document.getElementById('alphaHighlightStroke').value / 100;
+        for (const cell of sorted) {
+            if (!cell.polygon || cell.polygon.length < 3) continue;
+            const label = tl[cell.cell_id];
+            const hasLabel = label !== undefined && label !== null;
+            if (hasLabel) continue; // skip labelled cells
+
+            ctx.beginPath();
+            ctx.moveTo(cell.polygon[0][0]*s, cell.polygon[0][1]*s);
+            for (let i=1; i<cell.polygon.length; i++)
+                ctx.lineTo(cell.polygon[i][0]*s, cell.polygon[i][1]*s);
+            ctx.closePath();
+
+            ctx.fillStyle = hexRgba(hlColor, hlFillA);
+            ctx.fill();
+            ctx.strokeStyle = hexRgba(hlColor, hlStrokeA);
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+        }
+    }
+
+    // Selection highlight (always on top)
+    if (S.selectedCellId !== null) {
+        const cell = tile.cells.find(c => c.cell_id === S.selectedCellId);
+        if (cell && cell.polygon && cell.polygon.length >= 3) {
+            ctx.beginPath();
+            ctx.moveTo(cell.polygon[0][0]*s, cell.polygon[0][1]*s);
+            for (let i=1; i<cell.polygon.length; i++)
+                ctx.lineTo(cell.polygon[i][0]*s, cell.polygon[i][1]*s);
+            ctx.closePath();
+            ctx.strokeStyle = getSelectedStroke();
+            ctx.lineWidth   = 3;
+            const selHex = document.getElementById('colorSelected').value;
+            ctx.shadowColor = hexRgba(selHex, 0.5);
+            ctx.shadowBlur  = 8;
+            ctx.stroke();
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur  = 0;
+        }
+    }
+}
+
+// ================================================================
+// Canvas interaction
+// ================================================================
+(function init() {
+    const cv = document.getElementById('canvas');
+
+    cv.addEventListener('click', e => {
+        if (!S.tileData) return;
+        const rect = cv.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        const tile = S.tileData.tiles[S.currentTileIdx];
+        if (!tile || !tile.cells) return;
+
+        // Pick the smallest polygon that contains the click
+        let best = null, bestA = Infinity;
+        for (const c of tile.cells) {
+            if (!c.polygon || c.polygon.length < 3) continue;
+            if (ptInPoly(px, py, c.polygon, S.scale)) {
+                const a = polyArea(c.polygon);
+                if (a < bestA) { bestA = a; best = c; }
+            }
+        }
+
+        if (best) {
+            S.selectedCellId = best.cell_id;
+
+            // If an active label is set, assign it immediately
+            if (S.activeLabel === 'eraser') {
+                if (S.labels[S.currentTileIdx]) {
+                    delete S.labels[S.currentTileIdx][best.cell_id];
+                    S.dirty = true;
+                }
+            } else if (S.activeLabel !== null) {
+                if (!S.labels[S.currentTileIdx]) S.labels[S.currentTileIdx] = {};
+                S.labels[S.currentTileIdx][best.cell_id] = S.activeLabel;
+                S.dirty = true;
+            }
+        } else {
+            S.selectedCellId = null;
+        }
+
+        drawTile();
+        updateCellInfo();
+        updateProgress();
+        updateLegend();
+    });
+
+    cv.addEventListener('contextmenu', e => {
+        if (!S.tileData) return;
+        e.preventDefault();
+        const rect = cv.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        const tile = S.tileData.tiles[S.currentTileIdx];
+        if (!tile || !tile.cells) return;
+
+        let best = null, bestA = Infinity;
+        for (const c of tile.cells) {
+            if (!c.polygon || c.polygon.length < 3) continue;
+            if (ptInPoly(px, py, c.polygon, S.scale)) {
+                const a = polyArea(c.polygon);
+                if (a < bestA) { bestA = a; best = c; }
+            }
+        }
+
+        if (best && S.labels[S.currentTileIdx]) {
+            S.selectedCellId = best.cell_id;
+            delete S.labels[S.currentTileIdx][best.cell_id];
+            S.dirty = true;
+            drawTile();
+            updateCellInfo();
+            updateProgress();
+            updateLegend();
+        }
+    });
+
+    cv.addEventListener('mousemove', e => {
+        if (!S.tileData) return;
+        const rect = cv.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const tile = S.tileData.tiles[S.currentTileIdx];
+        if (!tile || !tile.cells) { cv.style.cursor='default'; return; }
+
+        let hover = false;
+        for (const c of tile.cells) {
+            if (c.polygon && c.polygon.length >= 3 && ptInPoly(px, py, c.polygon, S.scale))
+                { hover = true; break; }
+        }
+        cv.style.cursor = hover ? 'pointer' : 'default';
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e => {
+        // Inside inputs, handle Enter for adding labels
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
+            if ((e.target.id === 'newLabelNum' || e.target.id === 'newLabelName') && e.key === 'Enter') {
+                addNewLabel();
+                e.preventDefault();
+            }
+            return;
+        }
+        if ((e.key === 'h' || e.key === 'H') && !e.repeat) { startHighlight(); }
+        if (e.key === 'ArrowLeft')  { prevTile(); e.preventDefault(); }
+        if (e.key === 'ArrowRight') { nextTile(); e.preventDefault(); }
+        if (e.key === 'Escape') {
+            S.selectedCellId = null;
+            S.activeLabel = null;
+            drawTile();
+            updateCellInfo();
+            updateActiveLabelDisplay();
+            updateLegend();
+        }
+    });
+
+    document.addEventListener('keyup', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        if (e.key === 'h' || e.key === 'H') { stopHighlight(); }
+    });
+
+    document.getElementById('dirPath').addEventListener('keydown', e => {
+        if (e.key === 'Enter') scanDir();
+    });
+})();
+
+// ================================================================
+// Label management
+// ================================================================
+// Label-first workflow: add a new label to the defined set
+function addNewLabel() {
+    const numInp  = document.getElementById('newLabelNum');
+    const nameInp = document.getElementById('newLabelName');
+    const val = numInp.value.trim();
+    if (val === '') return;
+    const num = parseInt(val, 10);
+    if (isNaN(num) || num < 0) return;
+
+    // Avoid duplicates
+    if (S.definedLabels.some(l => l.num === num)) {
+        // Already exists — just select it
+        S.activeLabel = num;
+        updateActiveLabelDisplay();
+        updateLegend();
+        numInp.value = '';
+        nameInp.value = '';
+        return;
+    }
+
+    const name = nameInp.value.trim();
+    S.definedLabels.push({ num, name: name || `Label ${num}` });
+    S.definedLabels.sort((a, b) => a.num - b.num);
+    S.activeLabel = num;
+
+    numInp.value = '';
+    nameInp.value = '';
+
+    updateActiveLabelDisplay();
+    updateLegend();
+    drawTile();
+}
+
+function selectActiveLabel(num) {
+    S.activeLabel = (S.activeLabel === num) ? null : num;
+    updateActiveLabelDisplay();
+    updateLegend();
+}
+
+function selectEraser() {
+    S.activeLabel = (S.activeLabel === 'eraser') ? null : 'eraser';
+    updateActiveLabelDisplay();
+    updateLegend();
+}
+
+function removeDefinedLabel(num) {
+    S.definedLabels = S.definedLabels.filter(l => l.num !== num);
+    if (S.activeLabel === num) S.activeLabel = null;
+    updateActiveLabelDisplay();
+    updateLegend();
+}
+
+function updateActiveLabelDisplay() {
+    const el = document.getElementById('activeLabelDisplay');
+    if (S.activeLabel === null) {
+        el.className = 'active-label-none';
+        el.textContent = 'No label selected — pick one from the legend below';
+    } else if (S.activeLabel === 'eraser') {
+        el.className = 'active-label-indicator eraser';
+        el.innerHTML = '<span>\u2716</span><span>Eraser — click cells to remove labels</span>';
+    } else {
+        const def = S.definedLabels.find(l => l.num === S.activeLabel);
+        const name = def ? def.name : `Label ${S.activeLabel}`;
+        el.className = 'active-label-indicator';
+        el.innerHTML = `<div class="swatch" style="background:${labelHex(S.activeLabel)}"></div>` +
+            `<span>${esc(name)} (${S.activeLabel})</span>` +
+            `<span style="margin-left:auto;font-size:12px;color:#9ca3af;font-weight:400">Click cells to assign</span>`;
+    }
+}
+
+// ================================================================
+// Navigation
+// ================================================================
+function prevTile() {
+    if (!S.tileData || S.currentTileIdx <= 0) return;
+    loadTile(S.currentTileIdx - 1);
+}
+function nextTile() {
+    if (!S.tileData || S.currentTileIdx >= S.tileData.tiles.length - 1) return;
+    loadTile(S.currentTileIdx + 1);
+}
+
+// ================================================================
+// UI updates
+// ================================================================
+function updateSidebar() {
+    updateTileNav();
+    updateCellInfo();
+    updateProgress();
+    updateActiveLabelDisplay();
+    updateLegend();
+}
+
+function updateTileNav() {
+    if (!S.tileData) return;
+    const tiles = S.tileData.tiles;
+    const idx   = S.currentTileIdx;
+    document.getElementById('tileCounter').textContent = `${idx+1} / ${tiles.length}`;
+    const t = tiles[idx];
+    document.getElementById('tileInfo').innerHTML =
+        `<div>Slide: ${esc(t.slide_id)}</div>` +
+        `<div>Tile: ${esc(t.tile_name)}</div>` +
+        `<div>Cells: ${(t.cells||[]).length}</div>`;
+}
+
+function updateCellInfo() {
+    const el = document.getElementById('cellInfo');
+    if (S.selectedCellId === null) {
+        el.textContent = 'Click a cell polygon to select it';
+        return;
+    }
+    const tile = S.tileData.tiles[S.currentTileIdx];
+    const cell = tile.cells.find(c => c.cell_id === S.selectedCellId);
+    if (!cell) { el.textContent = 'Cell not found'; return; }
+
+    const label = (S.labels[S.currentTileIdx]||{})[cell.cell_id];
+    let h = `<div>Cell ID: ${cell.cell_id}</div>`;
+    h += (label !== undefined && label !== null)
+        ? `<div>Label: <strong>${label}</strong></div>`
+        : `<div>Label: <em>none</em></div>`;
+    el.innerHTML = h;
+}
+
+function updateProgress() {
+    if (!S.tileData) return;
+
+    // Tile
+    const tile = S.tileData.tiles[S.currentTileIdx];
+    const total = (tile.cells||[]).length;
+    const done  = Object.keys(S.labels[S.currentTileIdx]||{}).length;
+    const pct   = total ? Math.round(done/total*100) : 0;
+    document.getElementById('tileProgressBar').style.width  = pct+'%';
+    document.getElementById('tileProgressText').textContent = `${done} / ${total} (${pct}%)`;
+
+    // Batch
+    let bTotal=0, bDone=0;
+    for (let i=0; i<S.tileData.tiles.length; i++) {
+        bTotal += (S.tileData.tiles[i].cells||[]).length;
+        bDone  += Object.keys(S.labels[i]||{}).length;
+    }
+    const bPct = bTotal ? Math.round(bDone/bTotal*100) : 0;
+    document.getElementById('batchProgressBar').style.width  = bPct+'%';
+    document.getElementById('batchProgressText').textContent = `${bDone} / ${bTotal} (${bPct}%)`;
+}
+
+function updateLegend() {
+    // Collect labels used in actual data AND user-defined labels
+    const used = new Set();
+    for (const tl of Object.values(S.labels))
+        for (const l of Object.values(tl)) used.add(l);
+    for (const dl of S.definedLabels) used.add(dl.num);
+
+    const us = getUnlabelledStroke();
+    let h = `<div class="legend-item"><div class="swatch" style="background:${us}"></div><span>Unlabelled</span></div>`;
+
+    // Eraser tool
+    h += `<div class="eraser-item${S.activeLabel === 'eraser' ? ' active' : ''}" onclick="selectEraser()">`
+        + `<span>\u2716</span><span>Eraser</span></div>`;
+
+    // Clickable label items
+    for (const l of [...used].sort((a,b)=>a-b)) {
+        const def = S.definedLabels.find(d => d.num === l);
+        const name = def ? def.name : `Label ${l}`;
+        const isActive = S.activeLabel === l;
+        h += `<div class="legend-label-item${isActive ? ' active' : ''}" onclick="selectActiveLabel(${l})">`
+            + `<div class="swatch" style="background:${labelHex(l)}"></div>`
+            + `<span>${esc(name)} (${l})</span>`
+            + `<button class="remove-label" onclick="event.stopPropagation(); removeDefinedLabel(${l})" title="Remove label">&times;</button>`
+            + `</div>`;
+    }
+    document.getElementById('legend').innerHTML = h;
+
+    // Sync label color rows in settings panel
+    updateLabelColorRows(used);
+}
+
+function updateLabelColorRows(used) {
+    const container = document.getElementById('labelColorRows');
+    const sorted = [...used].sort((a,b) => a - b);
+    if (!sorted.length) {
+        container.innerHTML = '<div style="font-size:12px;color:#6b7280;">No labels assigned yet</div>';
+        return;
+    }
+    let html = '';
+    for (const l of sorted) {
+        const hex = labelHex(l);
+        html += `<div class="color-row">`
+            + `<label>Label ${l}</label>`
+            + `<input type="color" value="${hex}" data-label="${l}" onchange="onLabelColorChange(this)">`
+            + `</div>`;
+    }
+    container.innerHTML = html;
+}
+
+function onLabelColorChange(input) {
+    const l = parseInt(input.dataset.label, 10);
+    labelColors[l] = input.value;
+    drawTile();
+    updateLegend();
+}
+
+function onColorChange() {
+    // Update alpha display values
+    document.getElementById('alphaUnlabelledFillVal').textContent = document.getElementById('alphaUnlabelledFill').value + '%';
+    document.getElementById('alphaUnlabelledStrokeVal').textContent = document.getElementById('alphaUnlabelledStroke').value + '%';
+    document.getElementById('alphaSelectedVal').textContent = document.getElementById('alphaSelected').value + '%';
+    drawTile();
+    updateLegend();
+}
+
+function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+// ================================================================
+// File browser
+// ================================================================
+let browsePath = '';
+
+function openBrowser() {
+    const input = document.getElementById('dirPath').value.trim();
+    browsePath = input || '/data';
+    document.getElementById('browseModal').classList.add('open');
+    loadBrowse(browsePath);
+}
+
+function closeBrowser() {
+    document.getElementById('browseModal').classList.remove('open');
+}
+
+async function loadBrowse(path) {
+    browsePath = path;
+    const body = document.getElementById('browseBody');
+    body.innerHTML = '<div class="browse-empty">Loading\u2026</div>';
+    document.getElementById('btnScanHere').disabled = true;
+
+    try {
+        const r = await fetch('/api/browse', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({path}),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            body.innerHTML = `<div class="browse-empty">${esc(d.detail||'Error')}</div>`;
+            return;
+        }
+        browsePath = d.path;
+        renderBreadcrumb(d.path);
+
+        if (d.has_batches) {
+            document.getElementById('btnScanHere').disabled = false;
+        }
+
+        if (!d.entries.length) {
+            body.innerHTML = '<div class="browse-empty">Empty directory</div>';
+            return;
+        }
+
+        let html = '';
+        for (const e of d.entries) {
+            const badge = e.has_batches ? '<span class="entry-badge">has batches</span>' : '';
+            html += `<div class="browse-entry" ondblclick="loadBrowse('${escAttr(d.path + '/' + e.name)}')"` +
+                ` onclick="selectBrowseEntry(this, '${escAttr(d.path + '/' + e.name)}')"` +
+                `><span class="entry-icon">\ud83d\udcc1</span>` +
+                `<span class="entry-name">${esc(e.name)}</span>${badge}</div>`;
+        }
+        body.innerHTML = html;
+    } catch(e) {
+        body.innerHTML = `<div class="browse-empty">Error: ${esc(e.message)}</div>`;
+    }
+}
+
+function selectBrowseEntry(el, path) {
+    // Remove previous selection highlight
+    for (const e of el.parentElement.querySelectorAll('.browse-entry'))
+        e.style.background = '';
+    el.style.background = '#374151';
+    browsePath = path;
+    document.getElementById('btnScanHere').disabled = false;
+}
+
+function renderBreadcrumb(fullPath) {
+    // Normalise to forward slashes
+    fullPath = fullPath.replace(/\\/g, '/');
+    const parts = fullPath.split('/').filter(Boolean);
+    const bc = document.getElementById('browseBreadcrumb');
+    let html = '';
+    let accumulated = '';
+    for (let i = 0; i < parts.length; i++) {
+        accumulated += '/' + parts[i];
+        const p = accumulated;
+        if (i < parts.length - 1) {
+            html += `<span class="bc-seg" onclick="loadBrowse('${escAttr(p)}')">${esc(parts[i])}</span>`;
+            html += '<span class="bc-sep">/</span>';
+        } else {
+            html += `<span class="bc-current">${esc(parts[i])}</span>`;
+        }
+    }
+    bc.innerHTML = html;
+}
+
+function scanFromBrowser() {
+    document.getElementById('dirPath').value = browsePath;
+    closeBrowser();
+    scanDir();
+}
+
+function escAttr(s) {
+    return s.replace(/\\/g, '/').replace(/'/g, "\\'");
+}
+
+// ================================================================
+// Highlight missing labels (press-and-hold)
+// ================================================================
+function startHighlight() {
+    S.highlightMissing = true;
+    document.getElementById('highlightBtn').classList.add('active');
+    drawTile();
+}
+function stopHighlight() {
+    S.highlightMissing = false;
+    document.getElementById('highlightBtn').classList.remove('active');
+    drawTile();
+}
+function onHighlightSettingChange() {
+    document.getElementById('alphaHighlightFillVal').textContent = document.getElementById('alphaHighlightFill').value + '%';
+    document.getElementById('alphaHighlightStrokeVal').textContent = document.getElementById('alphaHighlightStroke').value + '%';
+    if (S.highlightMissing) drawTile();
+}
+
+// Close modal on Escape or clicking overlay background
+document.getElementById('browseModal').addEventListener('click', e => {
+    if (e.target.id === 'browseModal') closeBrowser();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('browseModal').classList.contains('open')) {
+        closeBrowser();
+        e.stopPropagation();
+    }
+}, true);
+
+// Warn before leaving with unsaved work
+window.addEventListener('beforeunload', e => {
+    if (S.dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// ================================================================
+// Evaluate
+// ================================================================
+async function openEvaluate() {
+    if (!S.dataDir || !S.currentBatch) {
+        setStatus('Load a batch first before evaluating.');
+        return;
+    }
+    document.getElementById('evalResults').style.display = 'none';
+    document.getElementById('evalError').style.display = 'none';
+    document.getElementById('evalLoading').style.display = 'none';
+    document.getElementById('evalModal').classList.add('open');
+
+    // Fetch available human label files
+    const sel = document.getElementById('humanLabelsSelect');
+    sel.innerHTML = '<option value="">Loading\u2026</option>';
+    try {
+        const url = `/api/human_labels?data_dir=${enc(S.dataDir)}&batch=${enc(S.currentBatch)}`;
+        const r = await fetch(url);
+        const d = await r.json();
+        if (!r.ok) { sel.innerHTML = `<option value="">Error: ${esc(d.detail)}</option>`; return; }
+        if (!d.files.length) {
+            sel.innerHTML = '<option value="">No human label files found</option>';
+            return;
+        }
+        sel.innerHTML = '<option value="">-- Select file --</option>';
+        for (const f of d.files)
+            sel.innerHTML += `<option value="${esc(f)}">${esc(f)}</option>`;
+    } catch(e) {
+        sel.innerHTML = `<option value="">Error: ${esc(e.message)}</option>`;
+    }
+}
+
+function closeEvaluate() {
+    document.getElementById('evalModal').classList.remove('open');
+}
+
+async function runEvaluate() {
+    const file = document.getElementById('humanLabelsSelect').value;
+    if (!file) { showEvalError('Please select a human labels file.'); return; }
+
+    document.getElementById('evalResults').style.display = 'none';
+    document.getElementById('evalError').style.display = 'none';
+    document.getElementById('evalLoading').style.display = 'block';
+    document.getElementById('runEvalBtn').disabled = true;
+
+    try {
+        const r = await fetch('/api/evaluate', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                data_dir: S.dataDir,
+                batch: S.currentBatch,
+                human_labels_file: file,
+            }),
+        });
+        const d = await r.json();
+        document.getElementById('evalLoading').style.display = 'none';
+        document.getElementById('runEvalBtn').disabled = false;
+
+        if (!r.ok) { showEvalError(d.detail || 'Evaluation failed'); return; }
+        renderEvalResults(d);
+    } catch(e) {
+        document.getElementById('evalLoading').style.display = 'none';
+        document.getElementById('runEvalBtn').disabled = false;
+        showEvalError(e.message);
+    }
+}
+
+function showEvalError(msg) {
+    const el = document.getElementById('evalError');
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+function metricClass(v) {
+    if (v >= 0.75) return 'good';
+    if (v >= 0.4)  return 'ok';
+    return 'bad';
+}
+
+function renderEvalResults(d) {
+    const m = d.metrics;
+
+    // Summary
+    document.getElementById('evalSummary').innerHTML =
+        `<div class="eval-card"><h4>Summary</h4>` +
+        `<div style="font-size:14px;color:#d1d5db">` +
+        `Cells compared: <strong>${d.n_cells}</strong> &nbsp;|&nbsp; ` +
+        `Human clusters: <strong>${d.n_human_clusters}</strong> &nbsp;|&nbsp; ` +
+        `Model clusters: <strong>${d.n_model_clusters}</strong></div></div>`;
+
+    // Metrics
+    const metrics = [
+        ['Accuracy', m.accuracy],
+    ];
+    let mhtml = '<div class="eval-card"><h4>Evaluation Metrics</h4><div class="metric-grid">';
+    for (const [name, val] of metrics) {
+        mhtml += `<div class="metric-item"><div class="metric-name">${name}</div>` +
+            `<div class="metric-value ${metricClass(val)}">${val.toFixed(4)}</div></div>`;
+    }
+    mhtml += '</div></div>';
+
+    // Per-tile confusion matrices
+    if (d.tile_comparison && d.tile_comparison.length) {
+        mhtml += '<div class="eval-card" style="margin-top:16px"><h4>Confusion Matrices</h4>';
+        for (const tile of d.tile_comparison) {
+            const cm = tile.confusion_matrix;
+            if (!cm || !cm.labels || !cm.labels.length) continue;
+            const tMatched = tile.cells.filter(c => c.match).length;
+            const tTotal = tile.cells.length;
+            const tAcc = tTotal ? ((tMatched / tTotal) * 100).toFixed(1) : '0.0';
+            mhtml += `<div style="margin-bottom:16px">`;
+            mhtml += `<div style="font-size:13px;color:#d1d5db;margin-bottom:4px"><strong>${tile.slide_id} / ${tile.tile_name}</strong>`;
+            mhtml += ` &mdash; Accuracy: <strong>${tAcc}%</strong> (${tMatched}/${tTotal})</div>`;
+            mhtml += renderConfusionMatrixHTML(cm.labels, cm.matrix);
+            mhtml += '</div>';
+        }
+        mhtml += '</div>';
+    }
+
+    document.getElementById('evalMetrics').innerHTML = mhtml;
+
+    document.getElementById('evalResults').style.display = 'block';
+    document.getElementById('saveMetricsBtn').style.display = '';
+    document.getElementById('saveMetricsMsg').style.display = 'none';
+
+    // Store latest results for saving
+    window._lastEvalResults = d;
+
+    // --- Tile comparison viewer ---
+    renderEvalTileViewer(d);
+}
+
+async function saveMetrics() {
+    if (!window._lastEvalResults) return;
+    const msgEl = document.getElementById('saveMetricsMsg');
+    msgEl.style.display = 'none';
+    document.getElementById('saveMetricsBtn').disabled = true;
+
+    // Build structured save payload with per-tile metrics
+    const d = window._lastEvalResults;
+    const tileMetrics = (d.tile_comparison || []).map(t => {
+        const total = t.cells.length;
+        const correct = t.cells.filter(c => c.match).length;
+        return {
+            slide_id: t.slide_id,
+            tile_name: t.tile_name,
+            n_cells: total,
+            accuracy: total ? +(correct / total).toFixed(4) : 0,
+            confusion_matrix: t.confusion_matrix || null,
+        };
+    });
+    const payload = {
+        n_cells: d.n_cells,
+        n_human_clusters: d.n_human_clusters,
+        n_model_clusters: d.n_model_clusters,
+        metrics: d.metrics,
+        tile_metrics: tileMetrics,
+    };
+
+    try {
+        const r = await fetch('/api/save_metrics', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                data_dir: S.dataDir,
+                batch: S.currentBatch,
+                results: payload,
+            }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+            msgEl.textContent = 'Saved to: ' + d.path;
+            msgEl.style.color = '#34d399';
+        } else {
+            msgEl.textContent = d.detail || 'Save failed';
+            msgEl.style.color = '#f87171';
+        }
+    } catch(e) {
+        msgEl.textContent = e.message;
+        msgEl.style.color = '#f87171';
+    }
+    msgEl.style.display = 'block';
+    document.getElementById('saveMetricsBtn').disabled = false;
+}
+
+// ================================================================
+// Eval Tile Comparison Viewer
+// ================================================================
+let evalTileState = { tiles: [], idx: 0, image: null, scale: 1 };
+
+function renderEvalTileViewer(d) {
+    const container = document.getElementById('evalTileViewer');
+    if (!d.tile_comparison || !d.tile_comparison.length) {
+        container.innerHTML = '';
+        return;
+    }
+    evalTileState.tiles = d.tile_comparison;
+    evalTileState.idx = 0;
+
+    container.innerHTML =
+        '<div class="eval-card">' +
+        '<h4>Tile Comparison (Post-Alignment)</h4>' +
+        '<div class="eval-legend-row">' +
+            '<div class="eval-legend-item"><div class="eval-legend-swatch" style="background:#34d399"></div> Match</div>' +
+            '<div class="eval-legend-item"><div class="eval-legend-swatch" style="background:#f87171"></div> Mismatch</div>' +
+            '<div style="color:#9ca3af;font-size:12px;margin-left:auto">Labels shown: Human / Aligned-Model</div>' +
+        '</div>' +
+        '<div class="eval-tile-nav">' +
+            '<button onclick="evalTilePrev()">&larr; Prev</button>' +
+            '<span class="eval-tile-counter" id="evalTileCounter"></span>' +
+            '<button onclick="evalTileNext()">Next &rarr;</button>' +
+        '</div>' +
+        '<div class="eval-tile-stats" id="evalTileStats"></div>' +
+        '<div class="eval-canvas-wrap"><canvas id="evalCanvas"></canvas></div>' +
+        '</div>';
+
+    loadEvalTile();
+}
+
+function evalTilePrev() {
+    if (evalTileState.idx > 0) { evalTileState.idx--; loadEvalTile(); }
+}
+function evalTileNext() {
+    if (evalTileState.idx < evalTileState.tiles.length - 1) { evalTileState.idx++; loadEvalTile(); }
+}
+
+function loadEvalTile() {
+    const t = evalTileState.tiles[evalTileState.idx];
+    document.getElementById('evalTileCounter').textContent =
+        `Tile ${evalTileState.idx + 1} / ${evalTileState.tiles.length}  —  ${t.slide_id} / ${t.tile_name}`;
+
+    const matched = t.cells.filter(c => c.match).length;
+    const total = t.cells.length;
+    document.getElementById('evalTileStats').innerHTML =
+        `Cells: <strong>${total}</strong> &nbsp;|&nbsp; ` +
+        `Correct: <strong style="color:#34d399">${matched}</strong> &nbsp;|&nbsp; ` +
+        `Mismatched: <strong style="color:#f87171">${total - matched}</strong> &nbsp;|&nbsp; ` +
+        `Accuracy: <strong>${total ? ((matched/total)*100).toFixed(1) : 0}%</strong>`;
+
+    const url = `/api/image?data_dir=${enc(S.dataDir)}&batch=${enc(S.currentBatch)}&filename=${enc(t.image_filename)}`;
+    const img = new Image();
+    img.onload = () => {
+        evalTileState.image = img;
+        const maxW = 800, maxH = 600;
+        evalTileState.scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        const cv = document.getElementById('evalCanvas');
+        cv.width  = Math.round(img.naturalWidth  * evalTileState.scale);
+        cv.height = Math.round(img.naturalHeight * evalTileState.scale);
+        drawEvalTile();
+    };
+    img.onerror = () => {
+        const cv = document.getElementById('evalCanvas');
+        const ctx = cv.getContext('2d');
+        cv.width = 400; cv.height = 100;
+        ctx.fillStyle = '#374151'; ctx.fillRect(0,0,400,100);
+        ctx.fillStyle = '#f87171'; ctx.font = '14px sans-serif';
+        ctx.fillText('Image not found: ' + t.image_filename, 20, 55);
+    };
+    img.src = url;
+}
+
+function renderConfusionMatrixHTML(labels, matrix) {
+    let html = '<div class="eval-cm-axis-label">Rows = Human &nbsp;|&nbsp; Columns = Aligned Model</div>';
+    html += '<table class="eval-cm-table"><thead><tr><th></th>';
+    for (const l of labels) html += `<th>${l}</th>`;
+    html += '</tr></thead><tbody>';
+    for (let r = 0; r < labels.length; r++) {
+        html += `<tr><td class="cm-row-label">${labels[r]}</td>`;
+        for (let c = 0; c < labels.length; c++) {
+            const val = matrix[r] ? (matrix[r][c] || 0) : 0;
+            const cls = r === c ? 'cm-diag' : (val > 0 ? 'cm-off' : '');
+            html += `<td class="${cls}">${val}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function drawEvalTile() {
+    const cv  = document.getElementById('evalCanvas');
+    const ctx = cv.getContext('2d');
+    const s   = evalTileState.scale;
+    const t   = evalTileState.tiles[evalTileState.idx];
+
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (evalTileState.image) ctx.drawImage(evalTileState.image, 0, 0, cv.width, cv.height);
+
+    // Build lookup from cell_id -> comparison data
+    const cellMap = {};
+    for (const c of t.cells) cellMap[c.cell_id] = c;
+
+    // Sort by polygon area (larger first) so smaller cells draw on top
+    const sorted = [...t.cells].filter(c => c.polygon && c.polygon.length >= 3)
+        .sort((a,b) => polyArea(b.polygon) - polyArea(a.polygon));
+
+    for (const cell of sorted) {
+        const poly = cell.polygon;
+        const isMatch = cell.match;
+
+        // Draw polygon
+        ctx.beginPath();
+        ctx.moveTo(poly[0][0]*s, poly[0][1]*s);
+        for (let i=1; i<poly.length; i++)
+            ctx.lineTo(poly[i][0]*s, poly[i][1]*s);
+        ctx.closePath();
+
+        // Fill: green for match, red for mismatch
+        ctx.fillStyle = isMatch ? 'rgba(52,211,153,0.35)' : 'rgba(248,113,113,0.40)';
+        ctx.fill();
+        ctx.strokeStyle = isMatch ? 'rgba(52,211,153,0.85)' : 'rgba(248,113,113,0.85)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Label at centroid: "H / M"
+        const [cx,cy] = centroid(poly);
+        const sx = cx*s, sy = cy*s;
+        const txt = `${cell.human_label} / ${cell.model_label_aligned}`;
+        ctx.font = 'bold 11px Segoe UI, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const m = ctx.measureText(txt);
+        const pw = m.width + 8, ph = 16;
+        ctx.fillStyle = isMatch ? 'rgba(0,0,0,0.65)' : 'rgba(120,0,0,0.75)';
+        ctx.fillRect(sx - pw/2, sy - ph/2, pw, ph);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(txt, sx, sy);
+    }
+}
+
+// Close evaluate modal on Escape or overlay click
+document.getElementById('evalModal').addEventListener('click', e => {
+    if (e.target.id === 'evalModal') closeEvaluate();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('evalModal').classList.contains('open')) {
+        closeEvaluate();
+        e.stopPropagation();
+    }
+}, true);
+</script>
+</body>
+</html>
