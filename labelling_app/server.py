@@ -66,6 +66,7 @@ def find_data_dir(parent_path):
 # Request / response models
 # ------------------------------------------------------------------
 
+
 class BrowseRequest(BaseModel):
     path: str
 
@@ -92,6 +93,7 @@ class SaveRequest(BaseModel):
 # Routes
 # ------------------------------------------------------------------
 
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     html_path = _TEMPLATE_DIR / "index.html"
@@ -116,7 +118,9 @@ def browse(body: BrowseRequest):
             has_batches = any(
                 d.name.startswith("batch_") for d in child.iterdir() if d.is_dir()
             )
-            entries.append({"name": child.name, "type": "dir", "has_batches": has_batches})
+            entries.append(
+                {"name": child.name, "type": "dir", "has_batches": has_batches}
+            )
 
     return {
         "path": str(target),
@@ -146,7 +150,9 @@ def scan(body: ScanRequest):
 @app.get("/api/tiles")
 def get_tiles(data_dir: str = Query(...), batch: str = Query(...)):
     if not data_dir or not batch:
-        raise HTTPException(status_code=400, detail="Missing data_dir or batch parameter")
+        raise HTTPException(
+            status_code=400, detail="Missing data_dir or batch parameter"
+        )
 
     # Sanitise batch name to prevent traversal
     batch = os.path.basename(batch)
@@ -219,6 +225,7 @@ def save_labels(body: SaveRequest):
 # Evaluate
 # ------------------------------------------------------------------
 
+
 class EvaluateRequest(BaseModel):
     data_dir: str
     batch: str
@@ -260,7 +267,8 @@ def list_human_labels(data_dir: str = Query(...), batch: str = Query(...)):
     if not os.path.isdir(directory):
         raise HTTPException(status_code=404, detail="Batch directory not found")
     files = sorted(
-        f for f in os.listdir(directory)
+        f
+        for f in os.listdir(directory)
         if f.startswith("human_labels_") and f.endswith(".json")
     )
     return {"files": files}
@@ -323,9 +331,18 @@ def evaluate(body: EvaluateRequest):
             if key in model_lookup:
                 human_raw.append(lc["human_label"])
                 model_raw.append(model_lookup[key])
-                cell_records.append((sid, tn, lc["cell_id"], lc["human_label"], model_lookup[key], model_polygons.get(key)))
+                cell_records.append(
+                    (
+                        sid,
+                        tn,
+                        lc["cell_id"],
+                        lc["human_label"],
+                        model_lookup[key],
+                        model_polygons.get(key),
+                    )
+                )
 
-    if len(human_raw) == 0:
+    if not human_raw:
         raise HTTPException(
             status_code=400,
             detail="No overlapping labelled cells found between human and model.",
@@ -353,7 +370,10 @@ def evaluate(body: EvaluateRequest):
         t_n_model = len(set(t_model_norm))
 
         _, t_match_map = _hungarian_match_accuracy(
-            t_human_norm, t_model_norm, t_n_human, t_n_model,
+            t_human_norm,
+            t_model_norm,
+            t_n_human,
+            t_n_model,
         )
 
         t_rev_human = {v: k for k, v in t_human_map.items()}
@@ -363,7 +383,11 @@ def evaluate(body: EvaluateRequest):
             cid, h_raw, m_raw, poly = rec[2], rec[3], rec[4], rec[5]
             m_norm = t_model_map[m_raw]
             aligned_h_idx = t_match_map.get(m_norm)
-            aligned_label = t_rev_human.get(aligned_h_idx, "?") if aligned_h_idx is not None else "?"
+            aligned_label = (
+                t_rev_human.get(aligned_h_idx, "?")
+                if aligned_h_idx is not None
+                else "?"
+            )
             cell_entry: dict = {
                 "cell_id": cid,
                 "human_label": h_raw,
@@ -376,10 +400,16 @@ def evaluate(body: EvaluateRequest):
             cells.append(cell_entry)
 
         # --- Build per-tile confusion matrix (human × aligned-model) ----
-        all_labels = sorted(set(
-            [c["human_label"] for c in cells]
-            + [c["model_label_aligned"] for c in cells if c["model_label_aligned"] != "?"]
-        ))
+        all_labels = sorted(
+            set(
+                [c["human_label"] for c in cells]
+                + [
+                    c["model_label_aligned"]
+                    for c in cells
+                    if c["model_label_aligned"] != "?"
+                ]
+            )
+        )
         label_to_idx = {l: i for i, l in enumerate(all_labels)}
         cm = [[0] * len(all_labels) for _ in all_labels]
         for c in cells:
@@ -391,13 +421,15 @@ def evaluate(body: EvaluateRequest):
         img_name = f"{sid}__{tn}"
         if not img_name.endswith(".png"):
             img_name += ".png"
-        tile_comparison.append({
-            "slide_id": sid,
-            "tile_name": tn,
-            "image_filename": img_name,
-            "cells": cells,
-            "confusion_matrix": {"labels": all_labels, "matrix": cm},
-        })
+        tile_comparison.append(
+            {
+                "slide_id": sid,
+                "tile_name": tn,
+                "image_filename": img_name,
+                "cells": cells,
+                "confusion_matrix": {"labels": all_labels, "matrix": cm},
+            }
+        )
 
     # --- Batch-level accuracy from tile-level alignments ------------------
     total_cells = 0
