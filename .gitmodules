@@ -1,0 +1,3 @@
+[submodule "paper"]
+	path = paper
+	url = https://github.com/OxfordCompetencyCenters/paper_edu06_histology_labelling.git
