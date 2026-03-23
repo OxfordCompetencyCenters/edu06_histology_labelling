@@ -361,13 +361,13 @@ def evaluate(body: EvaluateRequest):
 
     tile_comparison = []
     for (sid, tn), recs in tile_raw.items():
-        t_human = [r[3] for r in recs]
-        t_model = [r[4] for r in recs]
+        t_human = [r[3] for r in recs] # human_label
+        t_model = [r[4] for r in recs] # model_label
 
         t_human_norm, t_human_map = _normalize_labels(t_human)
         t_model_norm, t_model_map = _normalize_labels(t_model)
-        t_n_human = len(set(t_human_norm))
-        t_n_model = len(set(t_model_norm))
+        t_n_human = len(t_human_map)
+        t_n_model = len(t_model_map)
 
         _, t_match_map = _hungarian_match_accuracy(
             t_human_norm,
